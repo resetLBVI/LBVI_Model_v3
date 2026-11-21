@@ -39,18 +39,19 @@ public class logisticFunForCapture {
 
     /**
      * Returns all traps that are open on the current simulation day and year.
-     * A trap is open when its trapYear matches the current year and
-     * currentJulianDay falls within [trapOpenDate, trapCloseDate].
+     * A trap is open when its Year matches the current CALENDAR year (state.currentCalendarYear(),
+     * which maps simulation year 1 -> mpStartCalendarYear) and currentJulianDay falls within
+     * [mpOpenDate, mpCloseDate] (model-wide, same for all traps).
      *
-     * @param state the simulation environment (provides trapInfo, currentYear, currentJulianDay)
+     * @param state the simulation environment (provides trapInfo, currentCalendarYear(), currentJulianDay, mpOpenDate, mpCloseDate)
      * @return list of currently open traps
      */
     public static List<TrapInfoIndentifier> findOpenTraps(LBVIEnvironment state) {
         List<TrapInfoIndentifier> openTraps = new ArrayList<>();
-        for (TrapInfoIndentifier trap : state.trapInfo.values()) {
-            if (trap.year == state.currentYear &&
-                state.currentJulianDay >= trap.trapOpenDate &&
-                state.currentJulianDay <= trap.trapCloseDate) {
+        for (TrapInfoIndentifier trap : state.trapInfo) {
+            if (trap.year == state.currentCalendarYear() &&
+                state.currentJulianDay >= state.mpOpenDate &&
+                state.currentJulianDay <= state.mpCloseDate) {
                 openTraps.add(trap);
             }
         }

@@ -2,7 +2,8 @@ package lbvi.Traps;
 
 /*
 Initial Trap information:
-"POINT_X"    "POINT_Y"    "TrapID"     "Year"       "OpenDate"   "CloseDate"  "NDaysClose"
+"POINT_X"    "POINT_Y"    "TrapID"     "Year"
+Open/close dates are model-wide parameters (mpOpenDate, mpCloseDate), not per-trap columns.
  */
 
 public class TrapInfoIndentifier {
@@ -10,17 +11,11 @@ public class TrapInfoIndentifier {
     public final double trapPOINT_Y;
     public final int TrapID;
     public final int year;
-    public final int trapOpenDate;
-    public final int trapCloseDate;
-    public final int trapNDaysClose;
 
-    public TrapInfoIndentifier(double POINT_X, double POINT_Y, int trapID, int year, int OpenDate, int CloseDate, int NDaysClose) {
+    public TrapInfoIndentifier(double POINT_X, double POINT_Y, int trapID, int year) {
         this.trapPOINT_X = POINT_X;
         this.trapPOINT_Y = POINT_Y;
         TrapID = trapID;
         this.year = year;
-        this.trapOpenDate = OpenDate;
-        this.trapCloseDate = CloseDate;
-        this.trapNDaysClose = NDaysClose;
     }
 }

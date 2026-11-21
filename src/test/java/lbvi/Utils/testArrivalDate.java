@@ -1,14 +1,14 @@
-import lbvi.Utils.ArrivalDate;
-import lbvi.Utils.FilePath;
+package lbvi.Utils;
+
 import org.apache.commons.math3.exception.NumberIsTooLargeException;
 import org.apache.commons.math3.exception.NumberIsTooSmallException;
-import org.apache.commons.math3.exception.OutOfRangeException;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 import java.io.BufferedWriter;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.IntSummaryStatistics;
 import java.util.stream.IntStream;
@@ -64,20 +64,28 @@ public class testArrivalDate {
                 () -> ArrivalDate.arrivalDate(79, 80, 79));
     }
 
+    @Test
+    @DisplayName("Write arrival-date samples to CSV for R; all non-negative")
+    void writeSamplesForR() throws IOException {
+        int lower = 95, mode = 113, upper = 144;   // same params the old main() used
+        final int N = 100_000;
 
-    public static void main(String[] args) throws IOException {
-        String outPath = FilePath.getFileName("arrivalDate_samples.csv", false);
-        int lowerArrivalDate = 95; int modeArrivalDate = 113; int upperArrivalDate = 144;
-        try (BufferedWriter w = Files.newBufferedWriter(Paths.get(outPath))) {
-            w.write("run,sample_index,value\n");  // tidy header
-            for (int i=0; i<10; i++) {
-                for (int j = 0; j < 15000; j++) {
-                    int sample = ArrivalDate.arrivalDate(lowerArrivalDate, modeArrivalDate, upperArrivalDate);
-                    w.write(i + "," + j + "," + sample + "\n");
+        Path out = Paths.get("analysis", "data", "arrivalDate_samples.csv");
+        Files.createDirectories(out.getParent());
+
+        boolean allValid = true;
+        try (BufferedWriter w = Files.newBufferedWriter(out)) {
+            w.write("x\n");                          // single "x" column, matches the R read pattern (df$x)
+            for (int i = 0; i < N; i++) {
+                int x = ArrivalDate.arrivalDate(lower, mode, upper);
+                if (x < 0) {
+                    allValid = false;
                 }
+                w.write(Integer.toString(x));
+                w.write("\n");
             }
-            System.out.println("Wrote CSV: arrivalDate_samples.csv");
         }
+        assertTrue(allValid, "Every arrival date should be >= 0");
+        System.out.println("Wrote " + N + " arrival-date samples to " + out.toAbsolutePath());
     }
-
 }

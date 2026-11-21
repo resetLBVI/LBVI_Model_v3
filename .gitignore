@@ -34,3 +34,7 @@ target/
 
 ### build jar
 *.jar
+
+### R analysis: generated data + figures (regenerate via tests / Rscript)
+analysis/data/
+analysis/figures/

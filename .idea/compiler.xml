@@ -6,8 +6,12 @@
         <sourceOutputDir name="target/generated-sources/annotations" />
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
-        <module name="RESET_LBVI" />
+        <module name="RESET_LBVI (1)" />
       </profile>
     </annotationProcessing>
+    <bytecodeTargetLevel>
+      <module name="RESET_LBVI" target="17" />
+      <module name="RESET_LBVI (2)" target="17" />
+    </bytecodeTargetLevel>
   </component>
 </project>

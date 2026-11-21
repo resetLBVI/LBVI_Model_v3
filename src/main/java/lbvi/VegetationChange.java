@@ -33,38 +33,38 @@ public class VegetationChange implements Steppable {
         return potentialTerrList.stream().filter(id -> vegTerrInfo.get(id).terrFemaleID != -1).collect(Collectors.toList());
     }
 
-    /*
-    #########################################################################################
-                        Groundwater Impacts Vegetation Patch
-    ##########################################################################################
-     */
-    public void vegResponseToGroundwater (LBVIEnvironment state, int patchID) {
-        if (state.vegTerrInfo.get(patchID).patchWaterStress == WaterStress.ABOVENORMAL) {
-            if(state.vegTerrInfo.get(patchID).patchVegState == VegState.VERYHEALTHY) {
-                state.vegTerrInfo.get(patchID).patchVegCondition += 1;
-            } else if (state.vegTerrInfo.get(patchID).patchVegState == VegState.HEALTHY) {
-                state.vegTerrInfo.get(patchID).patchVegCondition += 2;
-            } else if (state.vegTerrInfo.get(patchID).patchVegState == VegState.STRESS) {
-                state.vegTerrInfo.get(patchID).patchVegCondition += 3;
-            } else if (state.vegTerrInfo.get(patchID).patchVegState == VegState.SEVERELYSTRESSED) {
-                state.vegTerrInfo.get(patchID).patchVegCondition += 3;
-            }
-        } else if (state.vegTerrInfo.get(patchID).patchWaterStress == WaterStress.NORMAL) {
-            if(state.vegTerrInfo.get(patchID).patchVegState == VegState.VERYHEALTHY) {
-                state.vegTerrInfo.get(patchID).patchVegCondition -= 2;
-            } else if (state.vegTerrInfo.get(patchID).patchVegState == VegState.HEALTHY) {
-                state.vegTerrInfo.get(patchID).patchVegCondition += 1;
-            } else if (state.vegTerrInfo.get(patchID).patchVegState == VegState.STRESS) {
-                state.vegTerrInfo.get(patchID).patchVegCondition += 2;
-            } else if (state.vegTerrInfo.get(patchID).patchVegState == VegState.SEVERELYSTRESSED) {
-                state.vegTerrInfo.get(patchID).patchVegCondition += 2;
-            }
-        } else if (state.vegTerrInfo.get(patchID).patchWaterStress == WaterStress.BELOWNORMAL) {
-            state.vegTerrInfo.get(patchID).patchVegCondition -= 3;
-        } else { //patchWaterStress = SEVERE DROUGHT
-            state.vegTerrInfo.get(patchID).patchVegCondition -= 5;
-        }
-    }
+//    /*
+//    #########################################################################################
+//                        Groundwater Impacts Vegetation Patch
+//    ##########################################################################################
+//     */
+//    public void vegResponseToGroundwater (LBVIEnvironment state, int patchID) {
+//        if (state.vegTerrInfo.get(patchID).patchWaterStress == WaterStress.ABOVENORMAL) {
+//            if(state.vegTerrInfo.get(patchID).patchVegState == VegState.VERYHEALTHY) {
+//                state.vegTerrInfo.get(patchID).patchVegCondition += 1;
+//            } else if (state.vegTerrInfo.get(patchID).patchVegState == VegState.HEALTHY) {
+//                state.vegTerrInfo.get(patchID).patchVegCondition += 2;
+//            } else if (state.vegTerrInfo.get(patchID).patchVegState == VegState.STRESS) {
+//                state.vegTerrInfo.get(patchID).patchVegCondition += 3;
+//            } else if (state.vegTerrInfo.get(patchID).patchVegState == VegState.SEVERELYSTRESSED) {
+//                state.vegTerrInfo.get(patchID).patchVegCondition += 3;
+//            }
+//        } else if (state.vegTerrInfo.get(patchID).patchWaterStress == WaterStress.NORMAL) {
+//            if(state.vegTerrInfo.get(patchID).patchVegState == VegState.VERYHEALTHY) {
+//                state.vegTerrInfo.get(patchID).patchVegCondition -= 2;
+//            } else if (state.vegTerrInfo.get(patchID).patchVegState == VegState.HEALTHY) {
+//                state.vegTerrInfo.get(patchID).patchVegCondition += 1;
+//            } else if (state.vegTerrInfo.get(patchID).patchVegState == VegState.STRESS) {
+//                state.vegTerrInfo.get(patchID).patchVegCondition += 2;
+//            } else if (state.vegTerrInfo.get(patchID).patchVegState == VegState.SEVERELYSTRESSED) {
+//                state.vegTerrInfo.get(patchID).patchVegCondition += 2;
+//            }
+//        } else if (state.vegTerrInfo.get(patchID).patchWaterStress == WaterStress.BELOWNORMAL) {
+//            state.vegTerrInfo.get(patchID).patchVegCondition -= 3;
+//        } else { //patchWaterStress = SEVERE DROUGHT
+//            state.vegTerrInfo.get(patchID).patchVegCondition -= 5;
+//        }
+//    }
 
 
     /* =========================================================

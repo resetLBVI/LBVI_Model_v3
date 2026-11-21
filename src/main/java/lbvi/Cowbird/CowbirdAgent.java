@@ -115,7 +115,7 @@ public class CowbirdAgent implements Steppable {
 
     /** ODD 3.16: lay one Cowbird egg in the given (eligible Vireo) nest. */
     private void parasitize(LBVIEnvironment state, Nest nest) {
-        nest.cowbirdEggLayingInVireoNests(state);
+        nest.cowbirdEggLayingInVireoNests(state, this.cowbirdID);
     }
 
     /**

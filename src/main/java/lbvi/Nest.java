@@ -37,7 +37,9 @@ public class Nest implements Steppable {
         this.nestPatchID = nestPatchID;
         this.nestTerrID = nestTerrID;
         this.nestFemaleID = nestFemaleID;
-        this.nestMaxNVireoEggs = state.random.nextInt(state.mpVireoClutchSize);
+        // Clutch size is not known at creation. ODD 3.8 draws it when the nest finishes building; the owning
+        // female then records the drawn value here (getNestMaxNEggs, from mpVireoPopClutchSize). Until then 0.
+        this.nestMaxNVireoEggs = 0;
         this.nestCoordX = state.vegTerrInfo.get(nestTerrID).terrCoordX;
         this.nestCoordY = state.vegTerrInfo.get(nestTerrID).terrCoordY;
         this.ended = false;
@@ -151,7 +153,7 @@ public class Nest implements Steppable {
      * draw on the following day (3.10).
      * @param state the simulation environment
      */
-    public void cowbirdEggLayingInVireoNests(LBVIEnvironment state) {
+    public void cowbirdEggLayingInVireoNests(LBVIEnvironment state, int cowbirdID) {
         state.nParasitism++;
         // egg counts live on the owning female agent (looked up by nestFemaleID = female's vireoID)
         LBVIAgent female = state.lbviAgentMap.get(this.nestFemaleID);
@@ -160,6 +162,13 @@ public class Nest implements Steppable {
         }
         // ODD 3.16: the Cowbird always lays exactly one egg (vireoNumCowbirdEggs always +1) ...
         female.vireoNumCowbirdEggs++;
+        // ODD 3.15: log the parasitism as a mortality event (logMortalityEvents.csv) - one Cowbird egg laid in
+        // this Vireo nest, recording the territory, nest, and the Cowbird that laid the egg.
+        // Header: step, Date, EventType, TerrID, VireoID, NestID, CowbirdID, NumIndividual, EntityType, YoungSp
+        String parasitismEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(),
+                state.currentJulianDay, "cowbird parasitism", this.nestTerrID, this.nestFemaleID, this.nestID,
+                cowbirdID, 1, NESTStatus.EGG, "cowbird");
+        state.logMortalityWriter.addToFile(parasitismEvent);
         // ... and a separate draw decides whether it also removes one of the female's Vireo eggs.
         if (state.random.nextBoolean(state.mpCowbirdVireoEggRemovalProb)) {
             if (female.vireoNumVireoEggs > 0) {

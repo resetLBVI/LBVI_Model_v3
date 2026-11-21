@@ -4,7 +4,7 @@ import org.apache.commons.math3.distribution.NormalDistribution;
 import org.apache.commons.math3.distribution.WeibullDistribution;
 import umontreal.ssj.probdist.InverseGaussianDist;
 
-import java.util.Random;
+import ec.util.MersenneTwisterFast;
 
 /**
  * Dispersal distance kernels were fit using weighted maximum likelihood estimation. The density function form
@@ -40,13 +40,23 @@ import java.util.Random;
 public class DispersalKernal {
 
     /**
-     * The Inverse Gaussian Distribution is used to sample a random distance for female adults
-     * @param mu
-     * @param lambda
-     * @param random
-     * @return
+     * The Inverse Gaussian Distribution is used to sample a random distance for female adults.
+     *
+     * Sampling uses the Michael-Schucany-Haas algorithm. Given a standard normal
+     * variate v ~ N(0, 1) and y = v^2, the candidate is:
+     *
+     *   x = mu + (mu^2 * y) / (2 * lambda)
+     *         - (mu / (2 * lambda)) * sqrt(4 * mu * lambda * y + mu^2 * y^2)
+     *
+     * Then draw u ~ U(0, 1) and return x if u <= mu / (mu + x), otherwise mu^2 / x.
+     * This form guarantees x > 0 for all y >= 0.
+     *
+     * @param mu     mean of the Inverse Gaussian distribution
+     * @param lambda shape parameter
+     * @param random source of randomness
+     * @return a sample from IG(mu, lambda)
      */
-    public static double sampleInverseGaussian(double mu, double lambda, Random random) {
+    public static double sampleInverseGaussian(double mu, double lambda, MersenneTwisterFast random) {
         //create a standard normal distribution
         NormalDistribution standardNormal = new NormalDistribution(mu, lambda);
         //Step 1: Generate a uniform number and convert it to a standard normal sample using inverseCumulativeProbability
@@ -58,7 +68,7 @@ public class DispersalKernal {
 
         //Step 3: Compute candidate x using the Michael-Schucany-Haas formula.
         double muSquared =mu * mu;
-        double sqrtTerm = Math.sqrt(4 * mu + muSquared * y * y);
+        double sqrtTerm = Math.sqrt(4 * mu * lambda * y + muSquared * y * y);
         double x = mu + (muSquared * y) / (2 * lambda) - (mu / (2 * lambda)) * sqrtTerm;
 
         //Step 4: Generate another uniform random number for the acceptance step
@@ -76,10 +86,10 @@ public class DispersalKernal {
      * female adult: mu = 2.66, lambda = 0.33
      * @param mu
      * @param lambda
+     * @param random source of randomness (pass the model's state.random for reproducible draws)
      * @return
      */
-    public static double sampleInverseGaussian_SSJ (double mu, double lambda) {
-        Random random = new Random();
+    public static double sampleInverseGaussian_SSJ (double mu, double lambda, MersenneTwisterFast random) {
         //Generate a uniform random number in (0,1)
         double u = random.nextDouble();
         //Inverse CDF sampling
@@ -94,34 +104,34 @@ public class DispersalKernal {
      * male juvenile: a = 3.33, b = 2.41
      * @param a
      * @param b
+     * @param random source of randomness (pass a seeded Random for reproducible draws)
      * @return
      */
-    public static double sampleBivariateT(double a, double b) {
-        Random random = new Random();
+    public static double sampleBivariateT(double a, double b, MersenneTwisterFast random) {
         //Generate a uniform random number in (0,1)
         double u = random.nextDouble();
         //Inverse CDF sampling
-        //x = a * sqrt((1-u)^(-1/(b-1))) - 1)
+        //x = a * sqrt((1-u)^(-1/(b-1)) - 1)
         double exponent = -1.0 / (b-1);
         double x = a * Math.sqrt(Math.pow(1-u, exponent) - 1);
-        System.out.println("Random sample x from 2Dt: " + x);
         return x;
     }
 
+
     /**
-     * The Willbull distribution is used to sample dispersal distance for female juveniles
+     * The Weibull distribution is used to sample dispersal distance for female juveniles
      * shape_b = 1.22, scale_a = 5.49
-     * @param shape_b
-     * @param scale_a
+     * @param shape_b shape parameter
+     * @param scale_a scale parameter
+     * @param random  source of randomness (pass a seeded Random for reproducible draws)
      * @return
      */
-    public static double sampleWillBull(double shape_b, double scale_a) {
-        //shape = b & scale = a in the CFD
-        // Create a Weibull distribution object
-        WeibullDistribution weibull = new WeibullDistribution(shape_b, scale_a);
-        //Generate a random sample
-        double randomWB = weibull.sample();
-        System.out.println("Random sample will bull: " + randomWB);
-        return randomWB;
+    public static double sampleWeibull(double shape_b, double scale_a, MersenneTwisterFast random) {
+        //Inverse-CDF sampling — identical to Commons Math's WeibullDistribution.sample():
+        //x = scale * (-ln(1 - u))^(1/shape)
+        double u = random.nextDouble();
+        double x = scale_a * Math.pow(-Math.log(1 - u), 1.0 / shape_b);
+        return x;
     }
+
 }
