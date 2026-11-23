@@ -6,6 +6,104 @@ A running log of code changes and bug fixes to the RESET LBVI model, so the team
 
 ---
 
+## 2026-11-23 — Change: "false start" events now logged to logMortalityEvents.csv instead of logSuccessEvents.csv
+
+The team considers a "false start" (a nest abandoned before egg-laying) a loss, not a success, so it now goes to the mortality file. "nest completion" stays in the success file.
+
+- `LBVIAgent.logBuildingEvent` handled both event types and wrote both to `logSuccessWriter`. It now branches: `"false start"` → `logMortalityWriter`; everything else (`"nest completion"`) → `logSuccessWriter`.
+- The two files are **not** identically shaped: `logMortalityEvents.csv` has 11 columns (an extra `CowbirdID` after `NestID`), `logSuccessEvents.csv` has 10. A false-start row is written in the 11-column mortality layout with `CowbirdID = "NA"` (a false start involves no cowbird); the completion row keeps the 10-column success layout. So a bare one-line writer swap would have misaligned the columns — the format string was adjusted accordingly.
+- **Files:** `src/main/java/lbvi/LBVIAgent.java` (`logBuildingEvent` only).
+- **Effect:** `logSuccessEvents.csv` no longer contains `"false start"` rows; they appear in `logMortalityEvents.csv` with `CowbirdID = NA`. Downstream scripts that counted false starts from the success file must read the mortality file instead. Compiles clean; 17/17 tests pass.
+
+## 2026-11-23 — Change: per-class long-distance dispersal probability (replaces the single `mpVireoLongDistanceDispersal`)
+
+The one model parameter `mpVireoLongDistanceDispersal` (prob. of dispersing far beyond the kernel's range; default 0.001) is replaced by four parameters, one per age/sex class, so each class can carry its own rate.
+
+- **New parameters** (in `LBVIEnvironment`):
+  - `mpVireoLongDistanceDispersalFJu = 0.001` — female juvenile
+  - `mpVireoLongDistanceDispersalFAd = 0.0196` — female adult
+  - `mpVireoLongDistanceDispersalMJu = 0.0491` — male juvenile
+  - `mpVireoLongDistanceDispersalMAd = 0.0165` — male adult
+- The old single field and its getter/setter were removed; each of the four has a public getter/setter (`get/setMpVireoLongDistanceDispersal<Class>`) so it is user-editable from the Model tab. The reflection-based `paramList.csv` picks them up automatically.
+- `LBVIAgent.dispersalKernel` already branched on the four classes; each branch's long-distance draw now reads its matching parameter (FAd/MAd/FJu/MJu) instead of the shared one. No other logic changed — the cutoffs (`mpVireoLowerCutoffLDD`/`mpVireoUpperCutoffLDD`) and the regular-distance kernels are untouched.
+- **Files:** `src/main/java/lbvi/LBVIEnvironment.java` (field + getters/setters), `src/main/java/lbvi/LBVIAgent.java` (4 draws in `dispersalKernel`).
+- **Effect:** FJu keeps the prior 0.001; the other three classes now disperse long-distance more often (MJu highest). Compiles clean; 17/17 tests pass.
+
+## 2026-11-23 — Feature: add a Year column to all time-series output files; log CowbirdID on cowbird-caused egg depredation and nest desertion
+
+Two logging additions requested by the team.
+
+**(1) Year column in every output file.** The four time-series logs that lacked a sim-year column now have one, inserted right after the step column (matching `logDebug.csv`'s `currentStep, Year, Date, …` convention). `logReproductivePerformance.csv` (`year`) and `logDebug.csv` (`Year`) already had it; `paramList.csv` is a parameter snapshot (no time dimension) and is unchanged.
+- `logMortalityEvents.csv`: header → `step, Year, Date, …`; all four writers updated (parasitism + nestDeath in `Nest`, `logInterannualMortality` + `logDailyMortalityForNest` in `LBVIAgent`).
+- `logSuccessEvents.csv`: header → `currentStep, Year, Date, …`; all five writers updated (hatch, fledge, fledgling-independence, building/false-start, clutch-completion).
+- `logDispersalDistance.csv`: header → `currentStep, Year, Date, …`; `logDispersalDistance` updated.
+- `logCowbirdArrivalOrDeparture.csv`: header → `currentStep, Year, date, …`; `logMovement` (`CowbirdAgent`) updated.
+- Value logged is `currentYear` (1-based sim year), read from the canonical clock the timer advanced at ordering -1.
+
+**(2) CowbirdID on cowbird-attributable mortality events.** `"egg depredation-Cowbird"` and `"nest desertion due to cowbird"` now record the responsible Cowbird's ID in the `CowbirdID` column, the same way a `"cowbird parasitism"` event does (previously both logged `"NA"`).
+- New field `Nest.parasitizingCowbirdID` (default -1), set to the laying Cowbird's ID in `cowbirdEggLayingInVireoNests`. If a nest is parasitized by more than one Cowbird across days, it holds the latest (eggs are tracked as counts, not individually, so a specific depredated cowbird egg can't be mapped to a specific Cowbird — the most-recent parasitizing Cowbird is the best available attribution).
+- `LBVIAgent.logDailyMortalityForNest` gained a 5-arg overload taking a `cowbirdID` String; the 4-arg form delegates with `"NA"`. The `"egg depredation-Cowbird"` call passes `nest.parasitizingCowbirdID`.
+- `Nest.nestDeath` logs `parasitizingCowbirdID` when the event is cowbird-caused (`eventType.contains("cowbird")`, i.e. `"nest desertion due to cowbird"`); all other nest deaths (predation, defoliation, TLB, egg-depredation desertion) stay `"NA"`.
+- **Files:** `src/main/java/lbvi/LBVIEnvironment.java` (4 headers), `src/main/java/lbvi/LBVIAgent.java` (row writers + overload + depredation call), `src/main/java/lbvi/Nest.java` (field + parasitism/nestDeath rows), `src/main/java/lbvi/Cowbird/CowbirdAgent.java` (movement row).
+- **Effect:** every per-event/per-year output row is now attributable to a sim year, and cowbird-caused egg loss and desertion are traceable to a Cowbird. Column counts were re-checked against each header. **Downstream parsers must expect the new `Year` column (and the now-populated `CowbirdID` for those two event types).**
+
+## 2026-11-23 — Change: sex-specific territory selection — males defend a territory regardless of female presence
+
+Split `nestTerritorySelection` by sex so that males establish and defend a territory independent of whether a female is present, while females continue to weigh male availability per the selection trait. Previously both sexes ran the identical trait logic, so a male preferentially settled on territories that already held a female — biologically backwards and a cause of inefficient pairing (both sexes chasing each other, needing to converge on the same territory at the same time).
+
+- **Why:** in reality a male finds and defends a territory, then waits for a female to choose him. The old symmetric code (`this.vireoSexFemale ? queryTerrByPotentialMales : queryTerrByPotentialFemales` at the mate-availability traits) had males seeking females, so no stable set of defended territories formed for females to select from.
+- **How:** `nestTerritorySelection` now branches on sex. Females run the unchanged trait `switch`. Males run a new `selectMaleDefenceTerritory` that ignores mate (female) availability:
+  - Traits 0/2/3 (have a habitat-quality component): defend the best-quality territory, **random tie-break** among equal-top-quality territories.
+  - Traits 1 (mate-only) and 4 (random): defend a **random** suitable territory.
+  The global same-sex / `terrQuality==0` exclusions in `findPotentialTerritoryList` (`:636-650`) are unchanged, so males still never pick an already-defended (male-occupied) territory. On selection a male claims the territory (`claimTerritory` → `terrMaleID`) and parks in `PAIR` to wait, exactly as before.
+- **Files:**
+  - `src/main/java/lbvi/LBVIAgent.java` — `nestTerritorySelection` wrapped the existing trait `switch` in an `else` (female-only) branch and added `selectMaleDefenceTerritory(state)` for males; new private method `selectMaleDefenceTerritory`. Shared post-selection block (`claimTerritory`, `logDispersalDistance`, TEMP diagnostic) unchanged. The female switch's `vireoSexFemale ? males : females` ternaries now always resolve to the male-availability query (left as-is to keep the female path untouched; safe to simplify later).
+- **Effect:** males form a stable layer of defended territories; dispersing females (who already seek male-occupied territories via `queryTerrByPotentialMales`) land where a male waits and pair immediately. Expected to raise pairing efficiency and reduce the non-breeding-adult surplus. **Team to confirm with a validation run.**
+
+> **⚠️ TEAM-DISCUSSION NOTE (pending) — male behavior under traits 1 and 4.** Per the user's instruction, males under trait 1 (mate-availability only) and trait 4 (random) currently pick a **random** suitable territory, because a defending male has no mate dimension to evaluate. The alternative Claude raised is to have males **always** defend by habitat quality regardless of the selection trait (treating "defend the best territory you can" as sex-invariant). The user is taking this to the team before it is finalized. Switching to always-by-quality is a small change (route traits 1/4 through the same quality branch as 0/2/3). Also pending the team: whether the quality tie-break should stay **random-among-ties** (current) or deterministic `qualityRank.get(0)` as the old trait-0 female logic used.
+
+## 2026-11-22 — Change: DISPERSAL → NESTTERRSELECT → PAIR now resolve in a single day (one time-step) instead of three
+
+Collapsed the three settling stages so an agent disperses, selects a territory, and attempts to pair within one step, rather than taking one day per stage.
+
+- **Why:** the team wants settling to be a single day's activity. Previously each stage was handled in its own `step()`, so a single settling attempt spanned three days, artificially shortening the effective breeding season and slowing male/female matching.
+- **How:** `LBVIAgent.step()` now wraps the stage `switch` in a bounded `while (settling)` loop. Only the two forward transitions set `settling = true` — `DISPERSAL → NESTTERRSELECT` (dispersal produced a territory list) and `NESTTERRSELECT → PAIR` (a territory was chosen) — so the loop runs at most DISPERSAL→NESTTERRSELECT→PAIR and then stops. `PAIR` never continues the loop, so: a female who pairs goes to `NESTBUILDING` (done that day); a female who finds no mate falls back to `DISPERSAL` and retries next day; a male who claimed a territory parks in `PAIR` and waits across days. Chose NOT to merge into one stage because a male's `PAIR` is a genuine multi-day waiting state (a single-stage design would have to re-introduce a wait stage anyway) and redefining the `Stage` enum would ripple into the debug logger and every stage `switch`.
+- **Design decision (team):** `ARRIVAL` is deliberately left as its own day — it is not chained into `DISPERSAL`. So a bird arrives on its arrival date, then disperses/selects/pairs the following day. (Claude offered an option to fold arrival in too; team chose to keep arrival separate.)
+- **Files:**
+  - `src/main/java/lbvi/LBVIAgent.java` — `step()` switched from `switch (currentStage)` (a value captured once) to a `while (settling) { switch (this.vireoReproStage) { … } }` that re-reads the live stage each pass; added `settling = (stage == NESTTERRSELECT)` at the end of the `DISPERSAL` case and `settling = (stage == PAIR)` at the end of the `NESTTERRSELECT` case. No stage bodies were otherwise changed; all other (biological-duration) stages still run once per step.
+- **Effect:** settling completes in ~1 day instead of ~3, so birds reach `NESTBUILDING` sooner and mate-matching (via `terrMaleID`/`terrFemaleID` in `vegTerrInfo`) converges faster. The matching dynamic itself is unchanged. Per-day retry semantics are preserved (one dispersal attempt per day). **Team to confirm with a validation run** — watch settlement/pairing timing and overall reproductive output.
+
+## 2026-11-22 — Bug fix: year-1 input agents now run the arrival-date algorithm before nesting (fixes inflated year-1 reproductive output)
+
+Startup (year-1 input) agents used to be placed directly in `NESTBUILDING` on day 0, so they bred for the entire year while every subsequent cohort was constrained to start only after the spring arrival window — producing abnormally high reproductive performance in year 1 only.
+
+- **Why:** `initAgents` set the initial pairs' stage to `NESTBUILDING` with a mate and territory, bypassing `ARRIVAL`. With no arrival-date gate they began building nests at day 0 (Jan 1) and had a full, unconstrained season to re-nest, inflating year-1 `NNests`/`NEggs`/`NFledglings`/etc. In all other years the annual reset returns birds to `ARRIVAL`, so they don't start until their drawn arrival date (late March or later).
+- **Fix:** the input pair now starts in `ARRIVAL` and runs the normal arrival-date algorithm. Because it already holds its input territory and mate, on arrival it jumps **straight to `NESTBUILDING`**, skipping `DISPERSAL`/`NESTTERRSELECT`/`PAIR` — gated by a new one-time `initialBreeder` flag that is cleared on first arrival, so year 2+ runs the ordinary dispersal/pairing cycle. Nest building starts the step after arrival (the `ARRIVAL` case has already run that step).
+- **Files:**
+  - `src/main/java/lbvi/LBVIAgent.java` — new field `boolean initialBreeder = false`; `checkArrival` routes `initialBreeder` birds to `NESTBUILDING` (not `DISPERSAL`) on arrival and clears the flag.
+  - `src/main/java/lbvi/LBVIEnvironment.java` — `initAgents` now sets the initial male and female to `Stage.ARRIVAL` (was `NESTBUILDING`) and `initialBreeder = true`; mate status and territory assignment unchanged.
+- **Effect:** year-1 breeding seasons are constrained to the spring arrival window like every other year, so year-1 reproductive output should fall into line with later years. Male and female of a pair draw independent arrival dates; harmless, since nesting is entirely female-driven and the male only parks in `NESTBUILDING` until season end. No change to territory/mate bookkeeping (initial pairs still skip `PAIR`, exactly as before — they just arrive first). **Team to confirm with a validation run** comparing year-1 vs later-year rows in `logReproductivePerformance.csv`.
+
+## 2026-11-22 — Change: record logReproductivePerformance.csv on the last day of the year (day 363), labelled currentYear; also schedule nests at ordering 1
+
+Moved the annual population summary from the first step of the next year to the last day of the breeding year, and made nest steppables share ordering 1 with all vireo agents.
+
+- **Why (recording timing):** the summary was collected at `getSteps() % 364 == 0` (day 0 of the next year) and back-labelled `currentYear - 1`, which the team found semantically awkward. The reproductive counters are frozen after the last independence event at `endOfSeasonDate = 219` and nothing touches them until the next reset, so recording any time in the static window [~day 220, 363] yields identical counter values. Recording on the last day of the year (day 363) lets us label the row with `currentYear` directly (no off-by-one) while still running after every agent's end-of-season reset — important because `nSingles` is incremented inside that reset (fires ~day 219-220, timing varies by stage path), so sampling earlier (e.g. literally at day 219) would undercount singles. Day 363 is provably after all resets.
+- **Why (nest ordering):** `Nest.step()` fires the daily cowbird-arrival trigger, which writes `nCowbirdArrival` / `nParasitism` (observer counters). Scheduling nests at ordering 1 (was the bare form's 0) keeps the observer at ordering 0 ahead of every counter-writer, consistent with the newborn-ordering fix above.
+- **Files:**
+  - `src/main/java/lbvi/LBVIObserver.java` — collection condition `getSteps() % 364 == 0` (with `> 0` guard) → `getSteps() % 364 == 363` (guard no longer needed, step 0 ≠ 363); `collectPopData` label `currentYear - 1` → `currentYear`; kill threshold `>= years*364` → `>= years*364 - 1` so the final year is still collected on its day-363 step and the run covers exactly steps 0 .. years*364-1 (one fewer trailing step than before — previously it ran one extra step into day 0 of year N+1).
+  - `src/main/java/lbvi/LBVIAgent.java` — nest scheduling (line ~814) `scheduleRepeating(newNest)` → `scheduleRepeating(state.schedule.getTime() + 1.0, 1, newNest)`; start time kept at next step (a nest is created mid-run, so EPOCH would be in the past).
+- **Effect:** `logReproductivePerformance.csv` rows are now labelled by the year they describe with no off-by-one, and the numbers are identical to before (same counters; `populationSize` is still the overwinter-survivor population). Within a breeding-season step the nest's cowbird trigger now ties with the owning female (both ordering 1) instead of running first — immaterial, since cowbird arrival is already a daily stochastic draw.
+
+## 2026-11-22 — Bug fix: schedule newborn agents at ordering 1 (was 0) so the observer precedes all agents on the year-boundary step
+
+Made every vireo agent share schedule ordering 1 so the observer's annual summary provably runs before any agent acts on the year-boundary step.
+
+- **Why:** `logReproductivePerformance.csv` is written by `LBVIObserver` (ordering 0) when `getSteps() % 364 == 0` — the first step of the next year — and then it zeros the model-level counters. Initial adults are scheduled at ordering 1 (`LBVIEnvironment.java:770,778`), so the observer (0) runs before them. But newborns used the bare `scheduleRepeating(newAgent)`, which defaults to **ordering 0** — a tie with the observer, broken randomly. Today this is harmless (on day 0 a newborn is in NONBREEDING with `currentJulianDay < endOfSeasonDate=219`, so its reset doesn't fire and it touches no counter), but it is an implicit invariant: if an agent ever incremented a counter on day 0, the random tie could miscount the summary.
+- **Files:**
+  - `src/main/java/lbvi/LBVIAgent.java` — line ~978, newborn scheduling changed from `scheduleRepeating(newAgent)` to `scheduleRepeating(state.schedule.getTime() + 1.0, 1, newAgent)`. Start time kept at `getTime()+1.0` (next step), matching the bare form — a newborn is created mid-run, so scheduling at `EPOCH (0.0)` would be in the past and MASON would throw. Only the ordering changed, 0 → 1.
+- **Effect:** the observer at ordering 0 now strictly precedes all vireo agents (initial and newborn) on every step, including the year boundary. No change to the counter totals today; this removes the latent fragility and makes the code match the stated intent in `LBVIEnvironment.java:354`. Note: nest steppables (`LBVIAgent.java:814`) are still scheduled at the bare ordering 0; left unchanged since they do not write the observer's model-level counters.
+
 ## 2026-11-21 — Feature: expose dispersal territory-search attempts as a parameter (mpVireoNumSearchAttempts), default 3→20
 
 Replaced the hard-coded search-iteration count in the DISPERSAL stage with a Model-tab parameter, and raised the default from 3 to 20.

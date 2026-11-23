@@ -25,6 +25,11 @@ public class Nest implements Steppable {
     int nestCountdownToRenesting;
     //cowbird related
     public boolean cowbirdArrived;
+    // The most recent Cowbird to parasitize this nest (lay an egg here). Used to attribute cowbird-caused
+    // mortality events — "egg depredation-Cowbird" and "nest desertion due to cowbird" — to a CowbirdID in
+    // logMortalityEvents.csv, the same way a parasitism event records the laying Cowbird. -1 = never
+    // parasitized. If more than one Cowbird parasitizes across days, this holds the latest.
+    public int parasitizingCowbirdID = -1;
     // A Vireo egg loss during egg-laying (predation or cowbird, ODD 3.16) is stamped here so the female's
     // NEXT-day actEggLaying can make the desertion draw (ODD 3.10). -1 / null = no pending loss.
     public int vireoEggLossDay;
@@ -162,11 +167,14 @@ public class Nest implements Steppable {
         }
         // ODD 3.16: the Cowbird always lays exactly one egg (vireoNumCowbirdEggs always +1) ...
         female.vireoNumCowbirdEggs++;
+        // remember the responsible Cowbird so a later cowbird-egg depredation or cowbird-caused desertion of
+        // this nest can be attributed to it in logMortalityEvents.csv (see LBVIAgent / Nest.nestDeath).
+        this.parasitizingCowbirdID = cowbirdID;
         // ODD 3.15: log the parasitism as a mortality event (logMortalityEvents.csv) - one Cowbird egg laid in
         // this Vireo nest, recording the territory, nest, and the Cowbird that laid the egg.
-        // Header: step, Date, EventType, TerrID, VireoID, NestID, CowbirdID, NumIndividual, EntityType, YoungSp
-        String parasitismEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(),
-                state.currentJulianDay, "cowbird parasitism", this.nestTerrID, this.nestFemaleID, this.nestID,
+        // Header: step, Year, Date, EventType, TerrID, VireoID, NestID, CowbirdID, NumIndividual, EntityType, YoungSp
+        String parasitismEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(),
+                state.currentYear, state.currentJulianDay, "cowbird parasitism", this.nestTerrID, this.nestFemaleID, this.nestID,
                 cowbirdID, 1, NESTStatus.EGG, "cowbird");
         state.logMortalityWriter.addToFile(parasitismEvent);
         // ... and a separate draw decides whether it also removes one of the female's Vireo eggs.
@@ -276,13 +284,17 @@ public class Nest implements Steppable {
     public void nestDeath (LBVIEnvironment state, String eventType) {
         //1. the newborn will die (eggs, nestlings, or fledglings) -
         // I don't know which stage the agent will be created, but if the agent is already created, it should die (TODO! 2026-06-01)
-        //2. record the mortality of nest - "step", "Date", "EventType", "TerrID", "VireoID", "NestID", "CowbirdID", "NumIndividual", "EntityType", "YoungSp"
+        //2. record the mortality of nest - "step", "Year", "Date", "EventType", "TerrID", "VireoID", "NestID", "CowbirdID", "NumIndividual", "EntityType", "YoungSp"
         //   read counts/species while the nest is still in its live stage (before it is set to DEAD below)
         int NumIndividualDead = getNumIndividualsInNest(state);
         String youngSpecies = getYoungSpecies(state);
         NESTStatus statusAtDeath = getStatus(state); // capture the live status before marking the nest ended
-        String nestDeath = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), state.currentJulianDay, eventType, this.nestTerrID,
-                this.nestFemaleID, this.nestID, "NA", NumIndividualDead, statusAtDeath, youngSpecies);
+        // Attribute a cowbird-caused desertion ("nest desertion due to cowbird") to the parasitizing Cowbird;
+        // every other nest death (predation, defoliation, TLB, egg-depredation desertion) has no CowbirdID.
+        String cowbirdIDField = (eventType != null && eventType.contains("cowbird") && this.parasitizingCowbirdID >= 0)
+                ? String.valueOf(this.parasitizingCowbirdID) : "NA";
+        String nestDeath = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), state.currentYear, state.currentJulianDay, eventType, this.nestTerrID,
+                this.nestFemaleID, this.nestID, cowbirdIDField, NumIndividualDead, statusAtDeath, youngSpecies);
         state.logMortalityWriter.addToFile(nestDeath);
         this.ended = true;
         state.activeNests.remove(this);

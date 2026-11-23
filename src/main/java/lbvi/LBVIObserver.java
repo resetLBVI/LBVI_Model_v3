@@ -5,22 +5,30 @@ import sim.engine.Steppable;
 
 import java.util.Observer;
 
-/*
-When there are no Vireos remaining in the breeding range, the actBreedingSeasonSummary action outputs the following
-statistics to the ‘logReproductionSummary.csv' output file that sum outcomes across all Vireos for the whole year t
-breeding season (see RESET User Guide for more details on the 'logReproductionSummary.csv’ output):
-•	|NPairs|- the number of unique female Vireos that created least one Nest.
-•	|NSingles|- the number of unique Vireos that never had a Mate.
-•	|NNests| - the total number of unique nests created.
-•	|NEggs| - the total number of eggs laid.
-•	|NNestlings| - the total number of eggs that hatched.
-•	|NFledgling| - the total number of nestlings that survived to fledging.
-•	|NFledIndep| - the total number of fledglings that survived to independence.
-•	|NSuccNests| - the total number of nests that produced at least one fledgling.
-•	|NCbrdArriv|- the total number of cowbirds that arrived in the model
-•	|NParasit| - the total number of cowbird parasitism events.
-•	|NCowbrdCap| - the total number of cowbirds captured in cowbird traps prior to parasitizing a Vireo Nest.
-
+/**
+ * Population observer. Scheduled at ordering 0 (before all agents, which run at ordering 1, and after the
+ * clock at ordering -1), repeating every step. Once per year, on the LAST day of the 364-day breeding year
+ * (getSteps() % 364 == 363), it appends one summary row to logReproductivePerformance.csv and then zeros the
+ * model-level counters for the next year. Day 363 is chosen because every agent has finished its end-of-season
+ * winter reset by then (those resets, around day ~219-220, are what increment nSingles), so the counts are
+ * complete, yet the row is still written within the year it describes — so it is labelled with the current year
+ * directly, no off-by-one. Each row has 13 columns: Year, PopulationSize, then the eleven statistics below,
+ * which sum outcomes across all Vireos for that year's breeding season (see RESET User Guide for more detail):
+ *   - NPairs    - the number of unique female Vireos that created at least one Nest.
+ *   - NSingles  - the number of unique breeding-eligible adult Vireos that never had a Mate this year.
+ *   - NNests    - the total number of unique (completed) nests created.
+ *   - NEggs     - the total number of eggs laid.
+ *   - NNestlings- the total number of eggs that hatched.
+ *   - NFledgling- the total number of nestlings that survived to fledging.
+ *   - NFledIndep- the total number of fledglings that survived to independence.
+ *   - NSuccNests- the total number of nests that produced at least one fledgling.
+ *   - NCbrdArriv- the total number of cowbirds that arrived in the model.
+ *   - NParasit  - the total number of cowbird parasitism events.
+ *   - NCowbrdCap- the total number of cowbirds captured in cowbird traps prior to parasitizing a Vireo Nest.
+ *
+ * A year-0 row capturing the initial (input) population is written separately in LBVIEnvironment.start().
+ * The run is stopped here once getSteps() reaches mpInputSimulationDurationYears * 364 - 1, in the same step
+ * that collects the final year, so every configured year is logged exactly once.
  */
 
 public class LBVIObserver implements Steppable {
@@ -28,14 +36,20 @@ public class LBVIObserver implements Steppable {
     @Override
     public void step(SimState simState) {
         LBVIEnvironment eState = (LBVIEnvironment) simState;
-        //collect population data once per year at the end of the breeding season
-        if (eState.schedule.getSteps() > 0 && eState.schedule.getSteps() % 364 == 0) {
+        //Collect population data once per year on the LAST day of the breeding year (day 363 of the 364-day
+        //year; getSteps() % 364 == 363). By this day every agent has completed its end-of-season winter reset
+        //(which fires around day ~219-220 and is what increments nSingles), so all counters for the year are
+        //final, while nothing has touched them since ~day 220 (no breeding or births). Recording here — rather
+        //than at day 0 of the next year — lets us label the row with the current year directly, with no
+        //off-by-one, and still guarantees we run after every reset (so nSingles is complete).
+        if (eState.schedule.getSteps() % 364 == 363) {
             collectPopData(eState);
             reset(eState);
         }
-        //stop the simulation once it has run the configured number of years (1 year = 364 steps). This runs
-        //after the year-boundary collection above, so the final year's summary is still logged before we stop.
-        if (eState.schedule.getSteps() >= (long) eState.mpInputSimulationDurationYears * 364L) {
+        //Stop once the configured number of years has run (1 year = 364 steps). The run covers steps
+        //0 .. (years*364 - 1); the final year's summary is collected above on that last step (day 363) and
+        //then we kill in the same step, so every configured year is logged exactly once.
+        if (eState.schedule.getSteps() >= (long) eState.mpInputSimulationDurationYears * 364L - 1L) {
             simState.kill();
         }
     }
@@ -48,11 +62,11 @@ public class LBVIObserver implements Steppable {
     private void collectPopData(LBVIEnvironment eState) {
         //start writing
         eState.populationSize = eState.vegetationGrid.getAllObjects().numObjs;
-        // Collection runs at a year boundary (first step of the next year), so currentYear is already the
-        // NEW year; label this summary with the year that just completed (currentYear - 1).
-        // Observer labels the completed year (currentYear - 1), since collection fires on the first step of the next year when currentYear has already ticked over. With
-        //  the 30-year default you'll now get clean rows for years 1–30.
-        String popInfo = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", eState.currentYear - 1,
+        // Collection runs on the last day of the breeding year (day 363), still within the current year, so
+        // label this summary with currentYear directly (no off-by-one). populationSize is the overwinter-
+        // survivor population entering next year, since interannual mortality has already been applied at the
+        // ~day 219-220 resets. With the 30-year default you get clean rows for years 1-30.
+        String popInfo = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", eState.currentYear,
                 eState.populationSize, eState.nPairs, eState.nSingles, eState.nNests, eState.nEggs, eState.nNestlings,
                 eState.nFledglings, eState.nFledIndipendence, eState.nSuccNests, eState.nCowbirdArrival,
                 eState.nParasitism, eState.nCowbirdCaptured); //13 attributes

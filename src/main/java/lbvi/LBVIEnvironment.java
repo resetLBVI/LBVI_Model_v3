@@ -107,7 +107,12 @@ public class LBVIEnvironment extends SimState {
     public double mpVireoTerrSearchDistanceM = 500; //* buffer distance in meters
     public double mpVireoSearchDistanceCoefficient = 0.1; //*
     public int mpVireoNumSearchAttempts = 20; //* number of expanding-radius search iterations an agent makes to build its potentialTerritoryList during dispersal (each iteration j widens the buffer by 1 + j*mpVireoSearchDistanceCoefficient); was hard-coded 3
-    public double mpVireoLongDistanceDispersal = 0.001; //* prob of disperse much longer distances than the maximum distances shown in dispersal kernels
+    //* prob of dispersing much longer distances than the maximum distances shown in dispersal kernels.
+    //One value per age/sex class (replaces the former single mpVireoLongDistanceDispersal).
+    public double mpVireoLongDistanceDispersalFJu = 0.001;  //* female juvenile
+    public double mpVireoLongDistanceDispersalFAd = 0.0196; //* female adult
+    public double mpVireoLongDistanceDispersalMJu = 0.0491; //* male juvenile
+    public double mpVireoLongDistanceDispersalMAd = 0.0165; //* male adult
     public double mpVireoLowerCutoffLDD = 20000; //*
     public double mpVireoUpperCutoffLDD = 200000; //*
     //simulation control
@@ -270,12 +275,12 @@ public class LBVIEnvironment extends SimState {
             this.debugWriter = new OutputWriter(logDebugFile);
             this.debugWriter.createFile(debugHeader);
             //(output 2) create logMortalityEvents
-            String[] logMortalityHeader = {"step", "Date", "EventType", "TerrID", "VireoID", "NestID", "CowbirdID", "NumIndividual", "EntityType", "YoungSp"}; //currently collect 10 data
+            String[] logMortalityHeader = {"step", "Year", "Date", "EventType", "TerrID", "VireoID", "NestID", "CowbirdID", "NumIndividual", "EntityType", "YoungSp"}; //currently collect 11 data
             logMortalityEventsFile = OutputWriter.getFileName(this.logMortalityEventsFile, false);
             this.logMortalityWriter = new OutputWriter(logMortalityEventsFile);
             this.logMortalityWriter.createFile(logMortalityHeader);
             //(output 3) create logSuccessEvents - annual summary for the nests
-            String[] logSuccessHeader = {"currentStep", "Date", "EventType", "TerrID", "VireoID", "NestID", "NumIndividual", "EntityType", "YoungSp"}; //curently collect 9 data
+            String[] logSuccessHeader = {"currentStep", "Year", "Date", "EventType", "TerrID", "VireoID", "NestID", "NumIndividual", "EntityType", "YoungSp"}; //curently collect 10 data
             logSuccessEventsFile = OutputWriter.getFileName(this.logSuccessEventsFile, false);
             this.logSuccessWriter = new OutputWriter(logSuccessEventsFile);
             this.logSuccessWriter.createFile(logSuccessHeader);
@@ -286,12 +291,12 @@ public class LBVIEnvironment extends SimState {
             this.logReproductivePerformanceWriter = new OutputWriter(logReproductivePerformanceFile);
             this.logReproductivePerformanceWriter.createFile(logReproductivePerformanceHeader);
             //(output 5) create logDispersalDistance
-            String[] logDispersalDistanceHeader = {"currentStep", "Date", "terrID", "vireoID", "PrevLoc", "Distance", "Sex", "AgeClass", "AgeYears"}; //determine the fields based on 2026-08-04 ODD; collect
+            String[] logDispersalDistanceHeader = {"currentStep", "Year", "Date", "terrID", "vireoID", "PrevLoc", "Distance", "Sex", "AgeClass", "AgeYears"}; //determine the fields based on 2026-08-04 ODD; collect
             logDispersalDistanceFile = OutputWriter.getFileName(this.logDispersalDistanceFile, false);
             this.logDispersalDistanceWriter = new OutputWriter(logDispersalDistanceFile);
             this.logDispersalDistanceWriter.createFile(logDispersalDistanceHeader);
             //(output 6) create logCowbirdArrivalOrDeparture
-            String[] logCowbirdArrivalOrDepartureHeader = {"currentStep", "date", "terrID", "CowbirdID", "ArrivalOrDepature"};
+            String[] logCowbirdArrivalOrDepartureHeader = {"currentStep", "Year", "date", "terrID", "CowbirdID", "ArrivalOrDepature"};
             logCowbirdArrivalOrDepartureFile = OutputWriter.getFileName(this.logCowbirdArrivalOrDepartureFile, false);
             this.logCowbirdArrivalOrDepartureWriter = new OutputWriter(logCowbirdArrivalOrDepartureFile);
             this.logCowbirdArrivalOrDepartureWriter.createFile(logCowbirdArrivalOrDepartureHeader);
@@ -770,15 +775,21 @@ public class LBVIEnvironment extends SimState {
             female.event = schedule.scheduleRepeating(Schedule.EPOCH, 1, female);
             Int2D loc = territoryLocations.get(terrID);
             vegetationGrid.setObjectLocation(female, loc.x, loc.y);
-            //In the year = 0, all the agents are paired and ready to build the nest
+            //The input pair keeps its territory and mate, but starts in ARRIVAL (not NESTBUILDING) so it runs the
+            //arrival-date algorithm first. On arrival (checkArrival) it jumps straight to NESTBUILDING, skipping
+            //DISPERSAL/NESTTERRSELECT/PAIR via the initialBreeder flag. This constrains the year-1 breeding season
+            //to the spring arrival window like every other year; previously they started in NESTBUILDING on day 0
+            //and bred the whole year, which inflated year-1 reproductive output.
             female.vireoMateStatus = true;
-            female.vireoReproStage = Stage.NESTBUILDING;
+            female.vireoReproStage = Stage.ARRIVAL;
+            female.initialBreeder = true;
 
             LBVIAgent male = makeAgent(false, true, terrID);
             male.event = schedule.scheduleRepeating(Schedule.EPOCH, 1, male);
             vegetationGrid.setObjectLocation(male, loc.x, loc.y);
             male.vireoMateStatus = true;
-            male.vireoReproStage = Stage.NESTBUILDING;
+            male.vireoReproStage = Stage.ARRIVAL;
+            male.initialBreeder = true;
 
             //mate with each other
             male.vireoMateID = female.vireoID;
@@ -896,8 +907,17 @@ public class LBVIEnvironment extends SimState {
     public int getMpVireoNumSearchAttempts() { return mpVireoNumSearchAttempts; }
     public void setMpVireoNumSearchAttempts(int val) { this.mpVireoNumSearchAttempts = val; }
 
-    public double getMpVireoLongDistanceDispersal() { return mpVireoLongDistanceDispersal; }
-    public void setMpVireoLongDistanceDispersal(double val) { this.mpVireoLongDistanceDispersal = val; }
+    public double getMpVireoLongDistanceDispersalFJu() { return mpVireoLongDistanceDispersalFJu; }
+    public void setMpVireoLongDistanceDispersalFJu(double val) { this.mpVireoLongDistanceDispersalFJu = val; }
+
+    public double getMpVireoLongDistanceDispersalFAd() { return mpVireoLongDistanceDispersalFAd; }
+    public void setMpVireoLongDistanceDispersalFAd(double val) { this.mpVireoLongDistanceDispersalFAd = val; }
+
+    public double getMpVireoLongDistanceDispersalMJu() { return mpVireoLongDistanceDispersalMJu; }
+    public void setMpVireoLongDistanceDispersalMJu(double val) { this.mpVireoLongDistanceDispersalMJu = val; }
+
+    public double getMpVireoLongDistanceDispersalMAd() { return mpVireoLongDistanceDispersalMAd; }
+    public void setMpVireoLongDistanceDispersalMAd(double val) { this.mpVireoLongDistanceDispersalMAd = val; }
 
     public double getMpVireoLowerCutoffLDD() { return mpVireoLowerCutoffLDD; }
     public void setMpVireoLowerCutoffLDD(double val) { this.mpVireoLowerCutoffLDD = val; }

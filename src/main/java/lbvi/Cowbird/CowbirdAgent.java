@@ -177,9 +177,9 @@ public class CowbirdAgent implements Steppable {
         event.stop();
     }
 
-    // logCowbirdArrivalOrDeparture.csv: "currentStep", "date", "terrID", "cowbirdID", "ArrivalOrDeparture"
+    // logCowbirdArrivalOrDeparture.csv: "currentStep", "Year", "date", "terrID", "cowbirdID", "ArrivalOrDeparture"
     private void logMovement(LBVIEnvironment state, String arrivalOrDeparture) {
-        String record = String.format("%s,%s,%s,%s,%s", state.schedule.getSteps(), state.currentJulianDay,
+        String record = String.format("%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), state.currentYear, state.currentJulianDay,
                 this.cowbirdCurrentTerrID, this.cowbirdID, arrivalOrDeparture);
         state.logCowbirdArrivalOrDepartureWriter.addToFile(record);
     }

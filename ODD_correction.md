@@ -7,6 +7,108 @@ unless stated otherwise — most entries here bring the ODD text in line with th
 
 ---
 
+## 2026-11-23 — Output files: "false start" events moved from the success log to the mortality log
+
+**Status:** the *code* changed; any ODD description of where false-start events are recorded must be brought in line.
+**Section:** the output-files listing (which events belong to `logSuccessEvents.csv` vs `logMortalityEvents.csv`) and the nest-building / false-start sub-model.
+
+### What changed in the code
+
+A "false start" (a nest abandoned before any egg is laid) was logged to `logSuccessEvents.csv`; it is now logged to `logMortalityEvents.csv`, because the team treats a false start as a loss rather than a success. "nest completion" is unchanged and stays in `logSuccessEvents.csv`. The false-start row is written in the mortality file's 11-column layout with `CowbirdID = "NA"` (no cowbird is involved in a false start). See CHANGELOG 2026-11-23.
+
+### Why it matters for the ODD
+
+If the ODD lists false-start events under the success-events output (or describes them as a success-file row), that is now stale: false starts are a mortality-file event. Note that a false start is still not counted as a nesting attempt or a nest loss in the population counters (`nNests`/`nPairs` are counted only at completion); only the *logging destination* changed.
+
+---
+
+## 2026-11-23 — Dispersal: long-distance dispersal probability is now class-specific
+
+**Status:** the *code* changed; any ODD description of the long-distance-dispersal parameter must be brought in line.
+**Section:** the dispersal sub-model (long-distance / "beyond-kernel" dispersal) and the parameter table.
+
+### What changed in the code
+
+The single parameter `mpVireoLongDistanceDispersal` (probability of dispersing far beyond the kernel range; one value, 0.001) was replaced by **four** parameters, one per age/sex class:
+
+- female juvenile `mpVireoLongDistanceDispersalFJu` = 0.001
+- female adult `mpVireoLongDistanceDispersalFAd` = 0.0196
+- male juvenile `mpVireoLongDistanceDispersalMJu` = 0.0491
+- male adult `mpVireoLongDistanceDispersalMAd` = 0.0165
+
+The dispersal routine already branched by class; each branch's long-distance Bernoulli draw now uses its own class parameter. The lower/upper LDD cutoffs and the per-class regular-distance kernels are unchanged. See CHANGELOG 2026-11-23.
+
+### Why it matters for the ODD
+
+If the ODD describes long-distance dispersal as governed by a single probability applied to all birds, that is no longer true: the probability varies by age/sex class. The parameter table should list the four parameters and their default values, and the sub-model text should state that the long-distance draw uses the disperser's own class rate (juveniles and adults, males and females, differ).
+
+---
+
+## 2026-11-23 — Output files: Year column added everywhere; CowbirdID on cowbird-caused egg depredation and desertion
+
+**Status:** the *code* changed; any ODD description of the output-file columns must be brought in line.
+**Section:** the output-files listing (column definitions for `logMortalityEvents.csv`, `logSuccessEvents.csv`, `logDispersalDistance.csv`, `logCowbirdArrivalOrDeparture.csv`).
+
+### What changed in the code
+
+1. A `Year` column (1-based simulation year) was added immediately after the step column to the four time-series logs that lacked one: `logMortalityEvents.csv`, `logSuccessEvents.csv`, `logDispersalDistance.csv`, `logCowbirdArrivalOrDeparture.csv`. (`logReproductivePerformance.csv` and `logDebug.csv` already had a year column.)
+2. In `logMortalityEvents.csv`, the `CowbirdID` column is now populated for `"egg depredation-Cowbird"` and `"nest desertion due to cowbird"` events (the responsible/parasitizing Cowbird), matching how `"cowbird parasitism"` already records it. Previously these two events logged `CowbirdID = NA`.
+
+See CHANGELOG 2026-11-23.
+
+### Why it matters for the ODD
+
+If the ODD lists the columns of these output files, those lists are now stale (extra `Year` column; `CowbirdID` no longer always `NA` for cowbird-caused mortality). Update the column definitions, and note that cowbird-caused egg depredation and desertion are now attributable to a CowbirdID. Caveat for the ODD text: when a nest is parasitized by multiple Cowbirds across days, the attributed CowbirdID is the most recent parasitizing Cowbird (individual eggs are not tracked).
+
+---
+
+## 2026-11-23 — Territory selection: males and females now follow different rules
+
+**Status:** the *code* changed; any ODD description of nest-territory selection / pairing that treats the sexes identically must be brought in line.
+**Section:** the nest-territory-selection sub-model (and any text describing how the `mpTerrSelectionTrait` strategies apply to each sex).
+
+### What changed in the code
+
+Territory selection is now sex-specific. A **male** establishes and defends a territory independent of female presence — he does not evaluate mate (female) availability. A **female** still selects per the `mpTerrSelectionTrait` strategy, which for her includes male availability. Previously both sexes ran the identical trait logic, so a male sought territories that already held a female. See CHANGELOG 2026-11-23.
+
+Male rule by trait: traits 0/2/3 (quality component) → defend the best-quality territory (random among equal-top-quality ties); traits 1 (mate-only) and 4 (random) → defend a random suitable territory. The same-sex-occupancy and `terrQuality==0` exclusions are unchanged and apply to both sexes.
+
+### Why it matters for the ODD
+
+If the ODD states that the selection-trait strategy (habitat quality / mate availability / combinations / random) applies the same way to both sexes, that is no longer true. The sub-model should describe males as settling/defending first (mate availability not a factor for them) and females as choosing among territories, weighing male availability per the trait. Note the pending team decision (CHANGELOG 2026-11-23) on how males should behave under the mate-only and random traits — the ODD wording for those two traits should not be finalized until the team resolves it.
+
+---
+
+## 2026-11-22 — Scheduling: dispersal, territory selection and pairing now occur in one time-step
+
+**Status:** the *code* changed; any ODD description of the dispersal / territory-selection / pairing schedule must be brought in line.
+**Section:** the sub-models for dispersal, nest-territory selection and pairing, and anywhere the ODD states the time step on which each occurs.
+
+### What changed in the code
+
+The `DISPERSAL`, `NESTTERRSELECT` and `PAIR` behaviours now all execute within a **single day (one time-step)** instead of one day per stage. An agent disperses, selects a territory, and attempts to pair in the same step. A female who finds no mate returns to dispersal and retries the next day; a male who has claimed a territory waits in the pairing state across days for a female to settle. See CHANGELOG 2026-11-22.
+
+### Why it matters for the ODD
+
+If the ODD describes these three processes as occurring on separate/consecutive days (or assigns each its own time step), that no longer holds: a settling attempt is now a single day's activity. `ARRIVAL` remains a separate day (a bird arrives on its arrival date and settles the following day). Any schedule diagram or process-overview text should show dispersal→selection→pairing as one daily step, with across-day retries for unsettled/unpaired birds.
+
+---
+
+## 2026-11-22 — Initialization: year-1 input agents now arrive before nesting
+
+**Status:** the *code* changed; any ODD description of model initialization / the first simulated year must be brought in line.
+**Section:** wherever the ODD describes the initial population setup and the start of the first breeding season (initialization, and the arrival/schedule sub-model).
+
+### What changed in the code
+
+Previously the initial (input) pairs were placed directly in the `NESTBUILDING` state at model start, so they began breeding on day 0 of year 1 with no arrival-date constraint. They now start in `ARRIVAL` and run the same arrival-date algorithm as every other year; because they already hold their input territory and mate, on arrival they proceed directly to `NESTBUILDING`, skipping the dispersal, territory-selection and pairing stages (via a one-time `initialBreeder` flag). See CHANGELOG 2026-11-22.
+
+### Why it matters for the ODD
+
+If the ODD states or implies that the initial population begins nest-building at the start of year 1 (or otherwise breeds on an unconstrained year-1 schedule), that no longer holds: year 1 is now gated by the spring arrival window like every subsequent year. The initialization text should say that input birds enter in the `ARRIVAL` state, draw an arrival date, and — because their territory and mate are given by the input — bypass dispersal/territory-selection/pairing on first arrival only. This was the cause of the previously observed abnormally high year-1 reproductive output.
+
+---
+
 ## 2026-11-21 — Output files: `logDebug.csv` log-on-change mode
 
 **Status:** the *code* changed; any ODD/documentation description of the debug output must be brought in line.

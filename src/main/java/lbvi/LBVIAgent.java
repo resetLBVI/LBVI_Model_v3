@@ -56,6 +56,12 @@ public class LBVIAgent implements Steppable {
     int nestCountdownToRenesting;
     int vireoCurrentNumAttempts;
     int lastReproResetYear = -1; // last currentYear in which this agent ran its end-of-season winter reset; guards against >1 reset/year
+    // True only for the year-1 input (startup) agents. They already hold their input territory and mate, so on
+    // arrival they skip DISPERSAL/NESTTERRSELECT/PAIR and begin nesting directly (see checkArrival). They still
+    // run the ARRIVAL arrival-date algorithm first, so their year-1 breeding season is constrained to the spring
+    // arrival window like every other year (previously they started in NESTBUILDING on day 0 and bred all year,
+    // inflating year-1 reproductive output). Cleared after the first arrival, so year 2+ runs the normal cycle.
+    boolean initialBreeder = false;
     // LOG-ON-CHANGE debug mode (LBVIEnvironment.debugLogOnChange): the non-time columns of the last debug row
     // actually written for this agent. null until the first row is written; compared each step so a state that
     // hasn't moved since the last row is not re-logged. Unused when debugLogOnChange is false.
@@ -117,10 +123,19 @@ public class LBVIAgent implements Steppable {
     public void step(SimState state) {
         LBVIEnvironment eState = (LBVIEnvironment) state;
         // Time comes from the canonical clock (LBVITimer updated it at ordering -1, before this agent runs).
-        Stage currentStage = this.vireoReproStage;
         //DEBUG: log each agent's stage at the start of every step (logDebug.txt)
         logDebugState(eState);
-        switch (currentStage) {
+        // The settling sequence DISPERSAL -> NESTTERRSELECT -> PAIR resolves within a SINGLE day: we run the
+        // chain forward in this one step rather than spending a day per stage. The loop continues only while the
+        // agent keeps ADVANCING through that chain (DISPERSAL->NESTTERRSELECT and NESTTERRSELECT->PAIR set
+        // `settling` below), so it is bounded to at most those three stages. A failed attempt (empty territory
+        // list, or a female who finds no mate) ends the day back in DISPERSAL and retries next day; a male that
+        // claims a territory parks in PAIR and waits across days; every other (biological-duration) stage runs
+        // once per step. ARRIVAL is deliberately NOT chained into DISPERSAL, so arrival stays its own day.
+        boolean settling = true;
+        while (settling) {
+            settling = false; // default each pass: handle one stage and stop unless it advances the chain
+        switch (this.vireoReproStage) {
             case ARRIVAL: //Stage 1
                 checkArrival(eState);
                 break;
@@ -170,9 +185,16 @@ public class LBVIAgent implements Steppable {
                     }
                     // END TEMP DIAGNOSTIC
                 }
+                //One-day settling: if dispersal produced a territory list (stage advanced to NESTTERRSELECT),
+                //keep going THIS step. If it stayed DISPERSAL (empty list) or hit the time-gate (NONBREEDING),
+                //settling stays false and the agent waits for the next day.
+                settling = (this.vireoReproStage == Stage.NESTTERRSELECT);
                 break;
             case NESTTERRSELECT: //Stage 3
                 nestTerritorySelection(eState); //In this stage, agents choose a mate based on three criteria
+                //One-day settling: if a territory was chosen (stage advanced to PAIR), attempt pairing in the
+                //SAME step. If selection fell back to DISPERSAL, settling stays false and we retry next day.
+                settling = (this.vireoReproStage == Stage.PAIR);
                 break;
             case PAIR: //Stage 4
                 //check current location and find the Mr. or Mrs. Right!!
@@ -287,7 +309,7 @@ public class LBVIAgent implements Steppable {
                         vireoNumVireoEggs = 0;
                         eState.nNestlings += vireoNumVireoNestlings;
                         //log to the "successEvents.csv" output file
-                        String incubationEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), eState.currentJulianDay, "hatch", this.vireoNestTerrID,
+                        String incubationEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), eState.currentYear, eState.currentJulianDay, "hatch", this.vireoNestTerrID,
                                 this.vireoID, this.nestID, this.vireoNumVireoNestlings, "nest", currentNest.getYoungSpecies(eState));
                         eState.logSuccessWriter.addToFile(incubationEvent);
                     }
@@ -346,7 +368,7 @@ public class LBVIAgent implements Steppable {
                         vireoNumVireoNestlings = 0;
                         eState.nFledglings += vireoNumVireoFledglings;
                         //log to the "successEvents.csv" output file
-                        String nestlingEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), eState.currentJulianDay, "fledge", this.vireoNestTerrID,
+                        String nestlingEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), eState.currentYear, eState.currentJulianDay, "fledge", this.vireoNestTerrID,
                                 this.vireoID, this.nestID, this.vireoNumVireoFledglings, "nest", currentNest.getYoungSpecies(eState));
                         eState.logSuccessWriter.addToFile(nestlingEvent);
 
@@ -399,7 +421,7 @@ public class LBVIAgent implements Steppable {
                             if (loc != null) eState.vegetationGrid.setObjectLocation(recruit, loc.x, loc.y);
                         }
                         //record the data to logSuccessEvent.csv (before zeroing vireoNumFledglings)
-                        String fledgingEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), eState.currentJulianDay,
+                        String fledgingEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), eState.currentYear, eState.currentJulianDay,
                                 "fledgling independence", this.vireoNestTerrID, this.vireoID, this.nestID,
                                 this.vireoNumVireoFledglings, "nest", currentNest.getYoungSpecies(eState));
                         eState.logSuccessWriter.addToFile(fledgingEvent);
@@ -451,6 +473,7 @@ public class LBVIAgent implements Steppable {
                 }
                 break;
         }
+        } // end one-day settling loop (continues only while DISPERSAL/NESTTERRSELECT keep advancing the chain)
     }
 
     /**
@@ -525,7 +548,16 @@ public class LBVIAgent implements Steppable {
         //boundary and then arrives normally during the next year's window.
         if(state.currentJulianDay >= vireoArrivalDate && state.currentJulianDay <= state.upperArrivalDate) {
             this.vireoCurrentLocation = this.vireoPreviousLocation;
-            this.vireoReproStage = Stage.DISPERSAL;
+            if (this.initialBreeder) {
+                //Year-1 input agents already hold their input territory and mate (set in initAgents), so skip
+                //DISPERSAL/NESTTERRSELECT/PAIR and go straight to nest building — which starts next step, since
+                //the switch has already run the ARRIVAL case this step. One-time: clear the flag so after the
+                //season's annual reset (which returns the bird to ARRIVAL) it runs the normal dispersal cycle.
+                this.initialBreeder = false;
+                this.vireoReproStage = Stage.NESTBUILDING;
+            } else {
+                this.vireoReproStage = Stage.DISPERSAL;
+            }
         }
     }
 
@@ -539,7 +571,7 @@ public class LBVIAgent implements Steppable {
         vireoDispDir = Math.random() * 2 * Math.PI; //math.random() returns a double in range (0.0, 1.0) 2*Math.PI giving us a random angle in radians
         vireoDispDist = 0; //initiate the distance variable
         if(vireoSexFemale == true && vireoAgeClassAdult == true) { //Female Adult
-            if (state.random.nextBoolean(state.mpVireoLongDistanceDispersal)) { //long dispersal distance
+            if (state.random.nextBoolean(state.mpVireoLongDistanceDispersalFAd)) { //long dispersal distance
                 vireoDispDist = state.random.nextDouble() * (state.mpVireoUpperCutoffLDD - state.mpVireoLowerCutoffLDD) + state.mpVireoLowerCutoffLDD;
             } else {//regular dispersal distance
                 //Use Inverse Gaussian Function to generate a random dispersal distance; mu=2.66, lambda=0.33
@@ -547,7 +579,7 @@ public class LBVIAgent implements Steppable {
                 vireoDispDist = DispersalKernal.sampleInverseGaussian_SSJ(2.66, 0.33, state.random) * 1000.0;
             }
         } else if(vireoSexFemale == false && vireoAgeClassAdult == true) { //Male Adult
-            if (state.random.nextBoolean(state.mpVireoLongDistanceDispersal)) {
+            if (state.random.nextBoolean(state.mpVireoLongDistanceDispersalMAd)) {
                 vireoDispDist = state.random.nextDouble() * (state.mpVireoUpperCutoffLDD - state.mpVireoLowerCutoffLDD) + state.mpVireoLowerCutoffLDD;
             } else { //regular dispersal distance
                 //Use 2Dt Function to generate a random dispersal distance; a=0.078, b=1.47
@@ -555,7 +587,7 @@ public class LBVIAgent implements Steppable {
                 vireoDispDist = DispersalKernal.sampleBivariateT(0.078, 1.47, state.random) * 1000.0;
             }
         } else if (vireoSexFemale == true && vireoAgeClassAdult == false) { //Female Juveniles
-            if (state.random.nextBoolean(state.mpVireoLongDistanceDispersal)) {
+            if (state.random.nextBoolean(state.mpVireoLongDistanceDispersalFJu)) {
                 vireoDispDist = state.random.nextDouble() * (state.mpVireoUpperCutoffLDD - state.mpVireoLowerCutoffLDD) + state.mpVireoLowerCutoffLDD;
             } else { //regular dispersal distance, Weibull, 5.49, 1.22
                 //Use Weibull distribution Function to generate a random dispersal distance; scale_a=5.49, shape_b=1.22
@@ -563,7 +595,7 @@ public class LBVIAgent implements Steppable {
                 vireoDispDist = DispersalKernal.sampleWeibull(1.22, 5.49, state.random) * 1000.0;
             }
         } else { //Male Juveniles, 2dt, 3.33, 2.41
-            if (state.random.nextBoolean(state.mpVireoLongDistanceDispersal)) {
+            if (state.random.nextBoolean(state.mpVireoLongDistanceDispersalMJu)) {
                 vireoDispDist = state.random.nextDouble() * (state.mpVireoUpperCutoffLDD - state.mpVireoLowerCutoffLDD) + state.mpVireoLowerCutoffLDD;
             } else { //regular dispersal distance, 2dt, 3.33, 2.41
                 //Use 2Dt Function to generate a random dispersal distance; a=3.33, b=2.41
@@ -633,7 +665,15 @@ for breeding.
     public void nestTerritorySelection(LBVIEnvironment state) {
         //capture the dispersal origin before a territory is chosen (vireoCurrentLocation is overwritten on selection)
         int dispersalOrigin = this.vireoCurrentLocation;
+        //Males and females now select differently. A MALE establishes and DEFENDS a territory regardless of
+        //whether a female is present (selectMaleDefenceTerritory); a FEMALE weighs male availability per the
+        //selection trait (the switch below). The shared claim/logging at the end is unchanged for both.
+        if (!this.vireoSexFemale) {
+            selectMaleDefenceTerritory(state);
+        } else {
         //Step 1: remove territories that already has same-sex agent from potentialTerritoryList
+        //(Only females reach this switch, so the `vireoSexFemale ? potentialMales : potentialFemales` ternaries
+        // below always resolve to the male-availability query.)
         List<Integer> qualityRank;
         switch (state.mpTerrSelectionTrait) {
             case 0: //TRAIT 1 - habitat quality only
@@ -721,6 +761,7 @@ for breeding.
                 }
                 break;
         }
+        } // end FEMALE territory selection
         //a territory was chosen this step (stage advanced to PAIR): record the realized dispersal
         if (this.vireoReproStage == Stage.PAIR) {
             this.vireoPreviousLocation = dispersalOrigin;
@@ -742,6 +783,48 @@ for breeding.
             }
         }
         // END TEMP DIAGNOSTIC
+    }
+
+    /**
+     * MALE territory selection. A male establishes and DEFENDS a territory independent of female presence; he
+     * does NOT query mate (female) availability the way a female queries male availability. The potential list
+     * passed in has already excluded male-occupied and quality==0 territories (findPotentialTerritoryList), so
+     * any territory here is a valid one to defend.
+     *
+     * Trait handling:
+     *  - Traits 0/2/3 (have a habitat-quality component): defend the best-quality territory, breaking ties at
+     *    random among the equal-top-quality territories.
+     *  - Traits 1 (mate-availability only) and 4 (random): a defending male has no mate dimension to evaluate,
+     *    so pick a random suitable territory.
+     *
+     * TEAM-DISCUSSION NOTE (pending): the random fallback for traits 1 and 4 is a placeholder. The alternative
+     * is to have males ALWAYS defend by habitat quality regardless of the selection trait. Revisit with the team
+     * before treating this as final; see CHANGELOG 2026-11-23.
+     */
+    private void selectMaleDefenceTerritory(LBVIEnvironment state) {
+        if (potentialTerritoryList == null || potentialTerritoryList.isEmpty()) {
+            this.vireoReproStage = Stage.DISPERSAL;   // nothing suitable to defend; retry next day
+            return;
+        }
+        switch (state.mpTerrSelectionTrait) {
+            case 0: case 2: case 3: { //traits with a habitat-quality component: defend the best-quality territory
+                List<Integer> qualityRank = VegetationChange.rankTerritoryByQuality(potentialTerritoryList, state.vegTerrInfo);
+                int topQuality = state.vegTerrInfo.get(qualityRank.get(0)).terrQuality;
+                ArrayList<Integer> topTied = new ArrayList<>();
+                for (Integer id : qualityRank) {
+                    if (state.vegTerrInfo.get(id).terrQuality == topQuality) {
+                        topTied.add(id);
+                    } else {
+                        break;
+                    }
+                }
+                this.vireoCurrentLocation = topTied.get(state.random.nextInt(topTied.size())); //random among top-quality ties
+                break;
+            }
+            default: //traits 1 (mate-only) and 4 (random): no quality dimension for a defending male -> random pick
+                this.vireoCurrentLocation = potentialTerritoryList.get(state.random.nextInt(potentialTerritoryList.size()));
+        }
+        this.vireoReproStage = Stage.PAIR; //claim (in the shared block) and defend; park and wait for a female
     }
 
     /**
@@ -784,7 +867,7 @@ for breeding.
         VegInfoIdentifier from = state.vegTerrInfo.get(prevLoc);
         VegInfoIdentifier to = state.vegTerrInfo.get(this.vireoCurrentLocation);
         double distance = Math.hypot(to.terrCoordX - from.terrCoordX, to.terrCoordY - from.terrCoordY);
-        String record = String.format("%s,%s,%s,%s,%s,%.4f,%s,%s,%d", state.schedule.getSteps(), state.currentJulianDay,
+        String record = String.format("%s,%s,%s,%s,%s,%s,%.4f,%s,%s,%d", state.schedule.getSteps(), state.currentYear, state.currentJulianDay,
                 this.vireoCurrentLocation, this.vireoID, prevLoc, distance,
                 this.vireoSexFemale ? "F" : "M", this.vireoAgeClassAdult ? "Adult" : "Juvenile", this.vireoAgeYears);
         state.logDispersalDistanceWriter.addToFile(record);
@@ -811,7 +894,11 @@ for breeding.
             int nestPatchID = state.vegTerrInfo.get(this.vireoCurrentLocation).patchID;
             this.nestID++;
             Nest newNest = new Nest(state, this.nestID, nestPatchID, this.vireoNestTerrID, this.vireoID);
-            newNest.event = state.schedule.scheduleRepeating(newNest);
+            // Ordering 1 (not the bare form's default 0) for consistency with all vireo agents, so the observer
+            // at ordering 0 runs before the nest's daily cowbird-arrival trigger (which writes nCowbirdArrival /
+            // nParasitism) on the year-boundary step. Start time kept at getTime()+1.0 (next step): a nest is
+            // created mid-run, so EPOCH would be in the past.
+            newNest.event = state.schedule.scheduleRepeating(state.schedule.getTime() + 1.0, 1, newNest);
             this.currentNest = newNest;
             state.activeNests.add(newNest);
             state.nestMap.put(this.nestID, newNest);
@@ -847,13 +934,23 @@ for breeding.
     }
 
     /**
-     * Logs a nest-building event ("false start" / "nest completion") to SuccessEvents.csv, matching the
-     * egg/hatch/fledge row layout: step, Date, EventType, TerrID, VireoID, NestID, NumIndividual, EntityType, YoungSp.
+     * Logs a nest-building event. A "false start" (a nest abandoned before egg-laying) is a loss, so it is
+     * written to logMortalityEvents.csv (11 cols, with CowbirdID = "NA" since no cowbird is involved);
+     * "nest completion" is a success and stays in logSuccessEvents.csv (10 cols). The two files share the
+     * step, Year, Date, EventType, TerrID, VireoID, NestID, …, NumIndividual, EntityType, YoungSp layout;
+     * the only difference is the mortality file's extra CowbirdID column after NestID.
      */
     private void logBuildingEvent(LBVIEnvironment state, String eventType, int numIndividual) {
-        String row = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), state.currentJulianDay,
-                eventType, this.vireoNestTerrID, this.vireoID, this.nestID, numIndividual, "nest", this.currentNest.getYoungSpecies(state));
-        state.logSuccessWriter.addToFile(row);
+        String youngSp = this.currentNest.getYoungSpecies(state);
+        if (eventType.equals("false start")) {
+            String row = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), state.currentYear, state.currentJulianDay,
+                    eventType, this.vireoNestTerrID, this.vireoID, this.nestID, "NA", numIndividual, "nest", youngSp);
+            state.logMortalityWriter.addToFile(row);
+        } else {
+            String row = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), state.currentYear, state.currentJulianDay,
+                    eventType, this.vireoNestTerrID, this.vireoID, this.nestID, numIndividual, "nest", youngSp);
+            state.logSuccessWriter.addToFile(row);
+        }
     }
 
     /**
@@ -905,7 +1002,7 @@ for breeding.
             femaleAgent.vireoNumNestAttempts ++; //double check ODD with Casey
             state.nEggs += femaleAgent.vireoNumVireoEggs;
             //log SuccessEvents.csv, clutch completion
-            String eggLayingEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), state.currentJulianDay, "clutch completion", femaleAgent.vireoNestTerrID,
+            String eggLayingEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), state.currentYear, state.currentJulianDay, "clutch completion", femaleAgent.vireoNestTerrID,
                     femaleAgent.vireoID, femaleAgent.nestID, femaleAgent.vireoNumVireoEggs, "nest", femaleAgent.currentNest.getYoungSpecies(state));
             state.logSuccessWriter.addToFile(eggLayingEvent);
         }
@@ -936,7 +1033,9 @@ for breeding.
         for (int i = 0; i < nCowbirdEggs; i++) {
             if (state.random.nextBoolean(predationProb)) {
                 femaleAgent.vireoNumCowbirdEggs--;
-                femaleAgent.logDailyMortalityForNest(state, "egg depredation-Cowbird", 1, NESTStatus.EGG);
+                //attribute the destroyed Cowbird egg to the Cowbird that parasitized this nest (as for a parasitism event)
+                String cbID = (nest.parasitizingCowbirdID >= 0) ? String.valueOf(nest.parasitizingCowbirdID) : "NA";
+                femaleAgent.logDailyMortalityForNest(state, "egg depredation-Cowbird", 1, NESTStatus.EGG, cbID);
             }
         }
         if (vireoEggLost) {
@@ -975,7 +1074,10 @@ for breeding.
         //count and vireoRecruitList holds the IDs; both are cleared each year in updateLBVIStateVariables.
         femaleAgent.vireoRecruitList.add(newbornID);
         femaleAgent.vireoNumRecruits++;
-        newAgent.event = state.schedule.scheduleRepeating(newAgent);
+        // Schedule at ordering 1 (not the bare form's default 0) so every vireo agent shares one ordering and
+        // the observer at ordering 0 provably runs before all agents on the year-boundary step. Keep the start
+        // time at getTime()+1.0 (next step): a newborn is created mid-run, so EPOCH would be in the past.
+        newAgent.event = state.schedule.scheduleRepeating(state.schedule.getTime() + 1.0, 1, newAgent);
         return newAgent;
     }
     /*
@@ -1041,8 +1143,8 @@ for breeding.
      * Call before die().
      */
     private void logInterannualMortality(LBVIEnvironment state, String eventType, String entityType) {
-        String record = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s",
-                state.schedule.getSteps(), state.currentJulianDay, eventType,
+        String record = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s",
+                state.schedule.getSteps(), state.currentYear, state.currentJulianDay, eventType,
                 this.vireoCurrentLocation, this.vireoID, "NA", "NA", 1, entityType, "NA");
         state.logMortalityWriter.addToFile(record);
     }
@@ -1122,13 +1224,20 @@ for breeding.
     }
 
     // Logs a daily-mortality event to logMortalityEvents.csv, aligned to logMortalityHeader:
-    // "step", "Date", "EventType", "TerrID", "VireoID", "NestID", "CowbirdID", "NumIndividual", "EntityType", "YoungSp"
-    // CowbirdID is "NA" because these deaths are not cowbird-related. Call before killCurrentNest,
-    // which clears currentNest (used here to read youngSpecies).
+    // "step", "Year", "Date", "EventType", "TerrID", "VireoID", "NestID", "CowbirdID", "NumIndividual", "EntityType", "YoungSp"
+    // This 4-arg form logs CowbirdID as "NA" (predator/non-cowbird deaths). For a cowbird-attributable event
+    // (e.g. "egg depredation-Cowbird"), use the 5-arg overload below to record the responsible Cowbird's ID.
+    // Call before killCurrentNest, which clears currentNest (used here to read youngSpecies).
     private void logDailyMortalityForNest(LBVIEnvironment eState, String eventType, int numIndividual, NESTStatus entityType) {
+        logDailyMortalityForNest(eState, eventType, numIndividual, entityType, "NA");
+    }
+
+    // As above, but records cowbirdID in the CowbirdID column — the Cowbird held responsible for a
+    // cowbird-attributable event. Pass the parasitizing Cowbird's ID (as a String) or "NA" if unknown.
+    private void logDailyMortalityForNest(LBVIEnvironment eState, String eventType, int numIndividual, NESTStatus entityType, String cowbirdID) {
         String youngSp = (currentNest != null) ? currentNest.getYoungSpecies(eState) : "none";
-        String dailyMortality = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", eState.schedule.getSteps(), eState.currentJulianDay,
-                eventType, this.vireoNestTerrID, this.vireoID, this.nestID, "NA", numIndividual, entityType, youngSp);
+        String dailyMortality = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", eState.schedule.getSteps(), eState.currentYear, eState.currentJulianDay,
+                eventType, this.vireoNestTerrID, this.vireoID, this.nestID, cowbirdID, numIndividual, entityType, youngSp);
         eState.logMortalityWriter.addToFile(dailyMortality);
     }
 
