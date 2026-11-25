@@ -54,7 +54,6 @@ public class LBVIAgent implements Steppable {
     int nestCountdownToFledging;
     int nestCountdownToIndependence;
     int nestCountdownToRenesting;
-    int vireoCurrentNumAttempts;
     int lastReproResetYear = -1; // last currentYear in which this agent ran its end-of-season winter reset; guards against >1 reset/year
     // True only for the year-1 input (startup) agents. They already hold their input territory and mate, so on
     // arrival they skip DISPERSAL/NESTTERRSELECT/PAIR and begin nesting directly (see checkArrival). They still
@@ -62,6 +61,16 @@ public class LBVIAgent implements Steppable {
     // arrival window like every other year (previously they started in NESTBUILDING on day 0 and bred all year,
     // inflating year-1 reproductive output). Cleared after the first arrival, so year 2+ runs the normal cycle.
     boolean initialBreeder = false;
+    // Natal (juvenile) dispersal marker. A simulation-born bird does NOT disperse in its natal year: it sits
+    // out that season in NONBREEDING, and the end-of-season winter reset ages it into the adult class. Its FIRST
+    // realized dispersal therefore happens the FOLLOWING year, while it is already classed adult - but that
+    // dispersal is biologically a natal (juvenile) dispersal. So for that ONE dispersal only, the bird uses the
+    // juvenile dispersal kernel and is logged as "Juvenile" (its true vireoAgeClass / vireoAgeYears are unchanged
+    // - this affects dispersal categorisation only). The flag is consumed when that first dispersal is recorded
+    // (logDispersalDistance), so any LATER dispersal - a re-dispersal after a failed pairing, or any dispersal in
+    // a later year - uses the adult kernel. Input (startup) birds never get this (default false): they are
+    // established adults and skip dispersal in year 1 anyway.
+    boolean natalDispersalPending = false;
     // LOG-ON-CHANGE debug mode (LBVIEnvironment.debugLogOnChange): the non-time columns of the last debug row
     // actually written for this agent. null until the first row is written; compared each step so a state that
     // hasn't moved since the last row is not re-logged. Unused when debugLogOnChange is false.
@@ -96,7 +105,6 @@ public class LBVIAgent implements Steppable {
         this.potentialTerritoryList = new ArrayList<>(); //create a new list
         this.potentialMateID = -1; // default no potential mate
         this.vireoMateStatus = false; //no mate yet
-        this.vireoCurrentNumAttempts = 0; //no attempt in the beginning
         if(this.vireoSexFemale) { //only females track below state variables
             this.vireoNumNestAttempts = 0; //current number of nest attempts
             this.hasNestedThisYear = false; //has not built a nest yet this season
@@ -141,7 +149,7 @@ public class LBVIAgent implements Steppable {
                 break;
             case DISPERSAL: //Stage 2
                 //check if there is enough time for nesting
-                if (eState.currentJulianDay >= endOfSeasonDate(eState)) {
+                if (eState.currentJulianDay >= eState.mpLastPossibleNestingDate) {
                     // TEMP DIAGNOSTIC (remove after non-breeding investigation; see note temp-dispersal-outcome-logging)
                     if (eState.debugLog) {
                         eState.logDispersalOutcomeWriter.addToFile(String.format("%d,%d,%d,%s,%s,TIMEGATE,%b",
@@ -239,7 +247,7 @@ public class LBVIAgent implements Steppable {
                     //Bug A fix: a male parks at PAIR waiting for a female to settle on his territory. At season
                     //end send him into the NONBREEDING annual reset so he ages, releases his territory, and
                     //returns to ARRIVAL for next year. Previously males never reached NONBREEDING and froze here.
-                    if (eState.currentJulianDay >= endOfSeasonDate(eState)) {
+                    if (eState.currentJulianDay >= eState.mpLastPossibleNestingDate) {
                         this.vireoReproStage = Stage.NONBREEDING;
                     }
                 }
@@ -247,13 +255,12 @@ public class LBVIAgent implements Steppable {
             case NESTBUILDING: //Stage 5
                 if (this.vireoSexFemale) { //only females build nests
                     nestBuilding(eState);
-                } else {
-                    //Bug A fix: a paired male is parked in NESTBUILDING (only the female builds). At season end
-                    //send him into the NONBREEDING annual reset instead of leaving him frozen here permanently.
-                    if (eState.currentJulianDay >= endOfSeasonDate(eState)) {
-                        this.vireoReproStage = Stage.NONBREEDING;
-                    }
                 }
+                //A paired male just parks here (only the female builds) and does NOT self-terminate on a date.
+                //Per the ODD, the FEMALE ends her mate's breeding season when she ends hers (see
+                //endMateBreedingSeason, called from the NONBREEDING reset); that also covers a nest that runs
+                //past mpLastPossibleNestingDate, since she only ends once her own nesting is finished. So the
+                //male simply waits in NESTBUILDING until his mate releases him into his NONBREEDING reset.
                 break;
             case EGGLAYING: //Stage 6
                 if(this.vireoSexFemale) {
@@ -408,9 +415,6 @@ public class LBVIAgent implements Steppable {
                         }
                         this.nestCountdownToIndependence--;
                     } else if (this.vireoNumVireoFledglings > 0 && this.nestCountdownToIndependence == 0) { //complete an attempt successfully
-                        this.vireoCurrentNumAttempts++;
-                        //male's vireoCurrentNumAttempts also need to be updated
-                        //mate.vireoCurrentNumAttempts ++;
                         eState.nFledIndipendence += this.vireoNumVireoFledglings;
                         eState.nSuccNests++;
                         // create recruits for each fledgling that reached independence
@@ -432,31 +436,48 @@ public class LBVIAgent implements Steppable {
                 }
                 break;
             case RENEST: //Stage 10 evaluate before re-nest
-                //evaluate if there is enough time for re-nesting
-                if (eState.currentJulianDay + eState.mpIncubationStageDuration + eState.mpNestlingStageDuration + eState.mpFledglingStageDuration + eState.mpRenestingIntervalDuration > eState.mpLastPossibleNestingDate) {
-                    //if there is NO time for re-nesting
-                    //actEndBreeding
+                //ODD actEvaluateRenesting. End the breeding season (actEndBreedingSeason) if EITHER
+                //  (a) the date is STRICTLY PAST the last possible nesting date - a nest may still be started ON
+                //      mpLastPossibleNestingDate itself, so the ODD uses ">" (today greater than), not ">="; OR
+                //  (b) she has used all her nesting attempts: vireoNumNestAttempts >= mpMaxNumAttempts (ODD
+                //      trigger "vireoNumNestingAttempts == mpVireoMaxNumAttempts"). vireoNumNestAttempts counts
+                //      every attempt that reached a completed clutch (success or failure; false starts excluded),
+                //      which is the ODD's "nesting attempts". [Pending: confirm this counter choice with Casey.]
+                //Otherwise there is still time and at least one attempt left, so she re-nests.
+                if (eState.currentJulianDay > eState.mpLastPossibleNestingDate
+                        || this.vireoNumNestAttempts >= eState.mpMaxNumAttempts) {
+                    //no time left, or no attempts left -> actEndBreedingSeason
                     this.vireoReproStage = Stage.NONBREEDING; //prepare for NON-Breeding
-                } else { //if there is enough time for re-nesting <= mpLastPossibleNestingDate
-                    if(nestCountdownToRenesting > 0){
-                        nestCountdownToRenesting--; //count down to renesting
-                    } else { //go to renesting stage next step
-                        this.nestCountdownToRenesting = eState.mpRenestingIntervalDuration; // reset for next attempt
+                } else { //before the cutoff AND attempts remain: still time to re-nest
+                    //ODD: decrement the renesting countdown each day and, on the day it reaches 0, start building
+                    //a fresh nest THAT SAME day (not the step after). nestCountdownToRenesting was set to
+                    //mpRenestingIntervalDuration at the triggering event (nest loss / fledgling independence /
+                    //false start).
+                    this.nestCountdownToRenesting--;
+                    if (this.nestCountdownToRenesting <= 0) {
+                        this.nestCountdownToRenesting = eState.mpRenestingIntervalDuration; // reset for the next attempt
                         this.vireoReproStage = Stage.NESTBUILDING; // create a fresh nest for the new attempt
                     }
                 }
                 break;
             case NONBREEDING: //Stage 11
                 //End-of-season winter reset. Fire ONCE per agent per year, when either the breeding season has
-                //ended (currentJulianDay >= mpLastPossibleNestingDate) or the agent is worn out from reaching
-                //mpMaxNumAttempts. The lastReproResetYear guard prevents the reset (interannual mortality, aging,
-                //nSingles count) from firing on every step the agent idles in NONBREEDING. (The previous
-                //'|| vireoReproStage == NONBREEDING' clause was always true here and caused that repeated reset,
-                //inflating nSingles/nNests via within-year recycling.)
-                if ((eState.currentJulianDay >= endOfSeasonDate(eState)
-                        || this.vireoCurrentNumAttempts >= eState.mpMaxNumAttempts)
+                //ended (currentJulianDay >= mpLastPossibleNestingDate) or she has used all her nesting attempts
+                //(vireoNumNestAttempts >= mpMaxNumAttempts - the SAME counter RENEST routes on, so a female sent
+                //here by the attempts trigger before the date cutoff still resets). The lastReproResetYear guard
+                //prevents the reset (interannual mortality, aging, nSingles count) from firing on every step the
+                //agent idles in NONBREEDING. (The previous '|| vireoReproStage == NONBREEDING' clause was always
+                //true here and caused that repeated reset, inflating nSingles/nNests via within-year recycling.)
+                if ((eState.currentJulianDay >= eState.mpLastPossibleNestingDate
+                        || this.vireoNumNestAttempts >= eState.mpMaxNumAttempts)
                         && this.lastReproResetYear < eState.currentYear) {
                     this.lastReproResetYear = eState.currentYear;
+                    //ODD actEndBreedingSeason: a female that ends her breeding season also ends her mate's. Send
+                    //her mate into his own NONBREEDING end-of-season reset (he runs it on his next step, i.e. "the
+                    //next day"). Done BEFORE this bird's own old-age/survival draw below, so the mate is released
+                    //even if she does not survive the winter. No-op for a male caller or an unmated female. This
+                    //replaces the paired male's former self-terminating date gate in NESTBUILDING.
+                    endMateBreedingSeason(eState);
                     //logReproductivePerformance.csv
                     //(1) NumPair (2) NumNest (3) NumEggs (4) NumNestlings (5) NumFledglings (6) NumIndependentFledglings (7) NumSuccessfulNests
                     //Count as a "single" only a breeding-eligible ADULT that never mated this year. Newborns now
@@ -522,16 +543,6 @@ public class LBVIAgent implements Steppable {
      */
 
     /**
-     * Day by which the breeding season is fully over: the last possible nest-start date plus a complete
-     * nesting cycle (incubation + nestling + fledgling). Any agent still lingering at or after this day
-     * (including a male parked in PAIR/NESTBUILDING) should enter the NONBREEDING annual reset.
-     */
-    private int endOfSeasonDate(LBVIEnvironment state) {
-        return state.mpLastPossibleNestingDate + state.mpIncubationStageDuration
-             + state.mpNestlingStageDuration + state.mpFledglingStageDuration;
-    }
-
-    /**
      * The checkArrival method determine the arrival date if the agent hasn't detemined its arrival date for this breeding season
      * If the currentStep is larger than the arrival date, the agent move to the previous year location
      * @param state
@@ -570,7 +581,11 @@ public class LBVIAgent implements Steppable {
     public void dispersalKernel(LBVIEnvironment state) {
         vireoDispDir = Math.random() * 2 * Math.PI; //math.random() returns a double in range (0.0, 1.0) 2*Math.PI giving us a random angle in radians
         vireoDispDist = 0; //initiate the distance variable
-        if(vireoSexFemale == true && vireoAgeClassAdult == true) { //Female Adult
+        // Pick the kernel by effective dispersal class: a natal-origin bird's FIRST dispersal uses the JUVENILE
+        // kernel even though it is already in the adult age class (natalDispersalPending; consumed later in
+        // logDispersalDistance). Otherwise the bird's real age class decides. See the natalDispersalPending doc.
+        boolean adultDispersal = this.vireoAgeClassAdult && !this.natalDispersalPending;
+        if(vireoSexFemale == true && adultDispersal == true) { //Female Adult
             if (state.random.nextBoolean(state.mpVireoLongDistanceDispersalFAd)) { //long dispersal distance
                 vireoDispDist = state.random.nextDouble() * (state.mpVireoUpperCutoffLDD - state.mpVireoLowerCutoffLDD) + state.mpVireoLowerCutoffLDD;
             } else {//regular dispersal distance
@@ -578,7 +593,7 @@ public class LBVIAgent implements Steppable {
                 //Kernel returns KM; territory coordinates are in METRES, so convert km -> m (x1000).
                 vireoDispDist = DispersalKernal.sampleInverseGaussian_SSJ(2.66, 0.33, state.random) * 1000.0;
             }
-        } else if(vireoSexFemale == false && vireoAgeClassAdult == true) { //Male Adult
+        } else if(vireoSexFemale == false && adultDispersal == true) { //Male Adult
             if (state.random.nextBoolean(state.mpVireoLongDistanceDispersalMAd)) {
                 vireoDispDist = state.random.nextDouble() * (state.mpVireoUpperCutoffLDD - state.mpVireoLowerCutoffLDD) + state.mpVireoLowerCutoffLDD;
             } else { //regular dispersal distance
@@ -586,7 +601,7 @@ public class LBVIAgent implements Steppable {
                 //Kernel returns KM; territory coordinates are in METRES, so convert km -> m (x1000).
                 vireoDispDist = DispersalKernal.sampleBivariateT(0.078, 1.47, state.random) * 1000.0;
             }
-        } else if (vireoSexFemale == true && vireoAgeClassAdult == false) { //Female Juveniles
+        } else if (vireoSexFemale == true) { //Female Juveniles (true juvenile class, or a natal first dispersal)
             if (state.random.nextBoolean(state.mpVireoLongDistanceDispersalFJu)) {
                 vireoDispDist = state.random.nextDouble() * (state.mpVireoUpperCutoffLDD - state.mpVireoLowerCutoffLDD) + state.mpVireoLowerCutoffLDD;
             } else { //regular dispersal distance, Weibull, 5.49, 1.22
@@ -867,10 +882,17 @@ for breeding.
         VegInfoIdentifier from = state.vegTerrInfo.get(prevLoc);
         VegInfoIdentifier to = state.vegTerrInfo.get(this.vireoCurrentLocation);
         double distance = Math.hypot(to.terrCoordX - from.terrCoordX, to.terrCoordY - from.terrCoordY);
+        // Label AgeClass by the SAME effective dispersal class the kernel used (see natalDispersalPending): a
+        // natal-origin bird's first dispersal is logged "Juvenile" though it is in the adult age class. The
+        // AgeYears column still reports the true age (so a natal disperser shows AgeYears=1, AgeClass=Juvenile).
+        boolean adultDispersal = this.vireoAgeClassAdult && !this.natalDispersalPending;
         String record = String.format("%s,%s,%s,%s,%s,%s,%.4f,%s,%s,%d", state.schedule.getSteps(), state.currentYear, state.currentJulianDay,
                 this.vireoCurrentLocation, this.vireoID, prevLoc, distance,
-                this.vireoSexFemale ? "F" : "M", this.vireoAgeClassAdult ? "Adult" : "Juvenile", this.vireoAgeYears);
+                this.vireoSexFemale ? "F" : "M", adultDispersal ? "Adult" : "Juvenile", this.vireoAgeYears);
         state.logDispersalDistanceWriter.addToFile(record);
+        // Consume the one-shot natal marker: ONLY this first recorded dispersal is juvenile. Any later dispersal
+        // (a re-dispersal after a failed pairing, or a dispersal in a later year) then uses the adult kernel/label.
+        this.natalDispersalPending = false;
     }
     /*
     ***********************************************************************************************
@@ -882,7 +904,8 @@ for breeding.
      * ODD - nest building (female-driven, Stage.NESTBUILDING). Building takes mpVireoNestBuildingDuration
      * days. On the first day the female creates and schedules a Nest; on each building day she makes a
      * "false start" draw (mpDailyProbNestDesertionBeforeEggLaying) - a false start abandons the nest (NOT
-     * counted as a nesting attempt) and she starts a fresh nest the next day. Otherwise she counts down and,
+     * counted as a nesting attempt) and sends her through renest evaluation (RENEST, ODD actEvaluateRenesting),
+     * which re-checks the date and waits the renesting interval before a fresh build. Otherwise she counts down and,
      * at completion, advances to EGGLAYING. The Nest's status (BUILDING here) is derived from this stage, so
      * nothing is written back to the Nest.
      */
@@ -905,10 +928,16 @@ for breeding.
             // NNests / NPairs are counted at nest COMPLETION (below), not at creation, so that false-start
             // rebuilds (abandoned before completion) are excluded while every completed attempt is counted.
         }
-        // Daily false-start check: abandon before egg-laying and rebuild next day.
+        // Daily false-start check (ODD actEvaluateRenesting trigger #3): abandon the half-built nest, then send
+        // the female through renest evaluation like any other nest loss - she re-checks the date against
+        // mpLastPossibleNestingDate and waits the renesting interval before building afresh, rather than
+        // rebuilding immediately. A false start does NOT count as a breeding attempt (no attempt counter is
+        // incremented here), per the ODD note.
         if (state.random.nextBoolean(state.mpDailyProbNestDesertionBeforeEggLaying)) {
             logBuildingEvent(state, "false start", 0);
             abandonNestBeforeEggLaying(state);
+            this.nestCountdownToRenesting = state.mpRenestingIntervalDuration;
+            this.vireoReproStage = Stage.RENEST;
             return;
         }
         // Count down the build; when it completes, move on to egg-laying.
@@ -956,7 +985,8 @@ for breeding.
     /**
      * Abandons a nest still under construction (false start): stops its schedule event, removes it from
      * global tracking, and clears the female's reference - WITHOUT logging a mortality, since a false start
-     * is not a nesting attempt. The female stays in NESTBUILDING and builds a fresh nest the next day.
+     * is not a nesting attempt. This method does not change her reproductive stage; the caller routes her
+     * through renest evaluation (Stage.RENEST) per ODD actEvaluateRenesting.
      */
     private void abandonNestBeforeEggLaying(LBVIEnvironment state) {
         if (this.currentNest == null) return;
@@ -1070,6 +1100,10 @@ for breeding.
         //juvenile winter survival, ages it to adult, and returns it to ARRIVAL for next year's breeding window.
         //Previously recruits started in ARRIVAL and early-born ones dispersed, paired and nested the same year.
         newAgent.vireoReproStage = Stage.NONBREEDING;
+        //First-dispersal-as-juvenile marker (see natalDispersalPending field doc): this bird's first realized
+        //dispersal - next year, once the winter reset has aged it into the adult class - still uses the juvenile
+        //kernel and "Juvenile" label, because it is a natal dispersal. Consumed at that first logged dispersal.
+        newAgent.natalDispersalPending = true;
         //J1 (ODD 3.20): record this offspring on its female parent. vireoNumRecruits is the per-season
         //count and vireoRecruitList holds the IDs; both are cleared each year in updateLBVIStateVariables.
         femaleAgent.vireoRecruitList.add(newbornID);
@@ -1291,7 +1325,6 @@ for breeding.
         this.vireoArrivalDate = -1;
         this.vireoReproStage = Stage.ARRIVAL;
         this.vireoMateStatus = false;
-        this.vireoCurrentNumAttempts = 0;
         if(this.vireoSexFemale) { //only females track below state variables
             this.vireoNumNestAttempts = 0;
             this.hasNestedThisYear = false; //reset so she is counted once in NPairs when she first nests next year
@@ -1311,6 +1344,23 @@ for breeding.
         }
         potentialTerritoryList = new ArrayList<>();
         vireoMateID = 0;
+    }
+
+    /**
+     * ODD actEndBreedingSeason (mate half): when a FEMALE ends her breeding season she also ends her mate's.
+     * This sends her current mate into the NONBREEDING end-of-season reset, which he runs on his next step
+     * ("the next day" in the ODD), so a paired male no longer has to self-terminate on a date gate. No-op for:
+     * a male caller (only the female releases the male), an unmated female, a mate that has already left the
+     * simulation, or a mate that already ran his own reset this year (guards against clobbering a male who has
+     * already reset forward to ARRIVAL).
+     */
+    private void endMateBreedingSeason(LBVIEnvironment state) {
+        if (!this.vireoSexFemale) return;                          // only a female ends her mate
+        if (!this.vireoMateStatus) return;                         // she has no current mate
+        LBVIAgent mate = state.lbviAgentMap.get(this.vireoMateID);
+        if (mate == null) return;                                  // mate already gone (e.g. died of old age)
+        if (mate.lastReproResetYear >= state.currentYear) return;  // he already ended his season this year
+        mate.vireoReproStage = Stage.NONBREEDING;                  // he runs his own reset on his next step
     }
 
 

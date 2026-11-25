@@ -6,6 +6,117 @@ A running log of code changes and bug fixes to the RESET LBVI model, so the team
 
 ---
 
+## 2026-11-24 — Bug fix: strip UTF-8 BOM on the first line of every CSV input loader
+
+A colleague's run crashed with `NullPointerException` at `LBVIEnvironment.loadVegAttributes` (`col.get("TerrID")` returned null) when loading `inTerritories2020SERDP.csv`. Cause: the CSV was saved (from Excel/Windows) with a UTF-8 BOM (`EF BB BF`), so the first header name parsed as `﻿TerrID`. `String.trim()` does not remove U+FEFF, so the BOM stayed glued to the first column name and the name lookup for that column (here `TerrID`, the first column in that file) failed — PatchID etc. matched because they were not first. Because colleagues hand-make their own CSVs on Windows, this was fixed for **all** input loaders, not just the one that crashed.
+
+- **`LBVIEnvironment.java`:** added a null-safe `stripBom(String)` helper (removes a single leading U+FEFF) and ran the first line of every CSV input loader through it: `loadVegAttributes`, `loadGroundwaterData`, `loadTrapPlan`, `loadInitVireoPopulation`, and `loadParameterList` (strips the BOM off the first parameter name so a BOM'd param file still applies). Removed the two earlier ad-hoc BOM handlings (`loadVegAttributes` per-token `replace`, `loadInitVireoPopulation` `startsWith`/`substring`) in favor of the shared helper so all loaders behave identically. `loadVegetationShapefile` reads the shapefile via GeoTools, not a CSV, so it is unaffected.
+- **Data (not code):** removed the BOM from three input CSVs in `RESET_LBVI_inputData/SERDPextent/` — `inTerritories2020SERDP.csv`, `inTerritories2020noWTPSERDP.csv`, `inVireoPopulation2020SERDP.csv` (all had the BOM on a leading `TerrID` column). With the code fix this is no longer required for the model to run, but the files are now clean regardless.
+- **Missing-column validation (same change):** added a `requireColumns(col, fileLabel, csvPath, required...)` helper and call it in each column-based loader right after the header map is built — `loadVegAttributes`, `loadGroundwaterData`, `loadTrapPlan`, `loadInitVireoPopulation`. A missing/misspelled/mis-cased required column now throws an `IOException` naming the missing column(s), listing the columns that WERE found, and giving the file path — instead of the old raw `NullPointerException` at a parse line. (`loadParameterList` is `name,value`, not column-based, so it needs no column check.)
+- Compiles clean; 17/17 tests pass.
+
+## 2026-11-24 — Feature: input data-file paths loadable from the parameter CSV; `getFileName` honors absolute paths
+
+Colleagues can now set the five input data-file paths from the parameter CSV instead of retyping them in the Model tab each run.
+
+- **`LBVIEnvironment.java`:** added `isInputPathParam(name)` recognizing `shpFilePath`, `vegAttributePath`, `groundwaterFilePath`, `trapPlanFilePath`, `initVireoPopulationFilePath`, and OR'd it into both the `writeParameterList()` keep-rule and the `loadParameterList()` accept-rule. These five fields now appear in the emitted `paramList.csv` and are applied when present in a loaded file. Excluded intentionally: the log OUTPUT files, `paramListFilePath`/`paramFilePath`, and the never-read `tlbFilePath`/`pshbFilePath`. The write happens before start() resolves these paths to absolute, so the snapshot keeps the user's original values and round-trips.
+- **`Utils/OutputWriter.java` — `getFileName()`:** an absolute `fileName` is now used as-is; a relative one is resolved against `baseDir` as before. Previously `new File(baseDir, fileName)` mangled an absolute path (Java strips the leading separator from an absolute child), so a pasted full path like `/Users/you/data/in.csv` resolved under the project folder. This lets a colleague point an input path (or any path) anywhere on their machine.
+  - **Fix (same day):** two defaults — `shpFilePath` and `vegAttributePath` — were declared with a leading slash (`/RESET_LBVI_inputData/...`) and had relied on the old mangling to be treated as relative; honoring absolute paths broke them (`File not found: /RESET_LBVI_inputData/RESET_merge_final.shp`). Removed the leading slashes (now consistent with the other three input paths), and added a legacy fallback in `getFileName`: an absolute-looking INPUT path that does not exist is retried as baseDir-relative, so older param files / saved GUI values with leading-slash paths keep working.
+- **`paramFilePath` is now written into the snapshot (write-only).** The emitted `paramList.csv` records which config file drove the run (blank = none). It is added to the writer keep-rule but deliberately NOT to `isInputPathParam`, so it is not loadable: by the time `loadParameterList` reaches that row the file is already open, so setting it would only make the output snapshot misreport the file actually used. The loader skips a `paramFilePath` row quietly (no warning, not counted), so loading an unedited snapshot stays clean.
+- **Docs:** `HOW_TO_RUN_WITH_PARAMS.md` gains an "Input data-file paths" subsection (table of the five rows + relative/absolute note + partial-file example).
+- Compiles clean; 17/17 tests pass.
+
+## 2026-11-23 — Refactor: remove the now-dead `endOfSeasonDate()` helper; RENEST date re-check kept (team decision)
+
+- **Removed `endOfSeasonDate()`** (`LBVIAgent.java`) — it returned `mpLastPossibleNestingDate + incubation + nestling + fledgling` (=219 by default). After the end-of-season/mate-release rework, every former caller was changed to `mpLastPossibleNestingDate` or replaced by the female-ends-mate mechanism, leaving this helper with zero callers. Deleted the method and its javadoc. No behavior change.
+- **RENEST date re-check — decision: keep per-day (no code change).** The team chose to keep the current behavior where RENEST re-checks the date against `mpLastPossibleNestingDate` on every countdown day (so a renest countdown that would finish past the cutoff is stopped), rather than the literal ODD "check once at the triggering event." The code already does this; the ODD text should be updated to say the renest is re-evaluated against the date each day (see ODD_correction 2026-11-23).
+- **Files:** `src/main/java/lbvi/LBVIAgent.java`.
+- Compiles clean; 17/17 tests pass.
+
+## 2026-11-23 — Refactor: remove the unused `vireoCurrentNumAttempts` field
+
+Deleted `vireoCurrentNumAttempts` (a per-female count of SUCCESSFUL nesting attempts, incremented at fledgling independence). After the max-attempts trigger was wired onto `vireoNumNestAttempts`, this field drove no logic, was never written to any output file, and duplicated the global `nSuccNests` success counter. Removed the declaration, the constructor init, the increment (and its two dangling `//male's…` comments), and the annual reset; trimmed the stale reference in the RENEST comment.
+
+- **Files:** `src/main/java/lbvi/LBVIAgent.java`.
+- **Effect:** none on behavior or output (the field was dead). Compiles clean; 17/17 tests pass.
+
+## 2026-11-23 — Change: wire the max-nesting-attempts end-of-season trigger (ODD actEndBreedingSeason trigger b)
+
+The ODD gives two triggers for actEndBreedingSeason: the date, and *"any Vireo whose vireoNumNestingAttempts == mpVireoMaxNumAttempts."* The second trigger was not actually wired — it appeared only in the NONBREEDING reset guard, but no stage transition routed a max-attempts female into NONBREEDING, so a female who used all her attempts before the date cutoff just kept re-nesting. Now wired.
+
+- **RENEST (`LBVIAgent.java`):** the end-of-season test now also fires when `vireoNumNestAttempts >= mpMaxNumAttempts`, so a female ends her season as soon as her last allowed attempt concludes (she no longer starts attempt max+1).
+- **NONBREEDING reset guard:** switched the attempts clause from `vireoCurrentNumAttempts` to `vireoNumNestAttempts` (the same counter RENEST now routes on), so a female sent to NONBREEDING by the attempts trigger *before* the date cutoff actually runs her reset instead of idling until the date.
+- **Counter choice — `vireoNumNestAttempts`, not `vireoCurrentNumAttempts`:** `vireoNumNestAttempts` increments at clutch completion (every attempt that reaches incubation, success or failure; false starts excluded), which matches the ODD's "nesting attempts" and its variable name `vireoNumNestingAttempts`. `vireoCurrentNumAttempts` increments only at fledgling independence (successful attempts only) — a max cap on it would almost never fire. **[Pending: confirm with Casey — the field carried a "double check ODD with Casey" note. If the team means successful attempts instead, it's a one-line swap at both sites.]**
+- **Side effect:** `vireoCurrentNumAttempts` now drives no logic (still incremented on success and reset each year, but used in no decision). Left in place; it may still be wanted for logging/analysis. Flag if it should be removed.
+- **Files:** `src/main/java/lbvi/LBVIAgent.java` (RENEST condition + NONBREEDING guard).
+- **Effect:** females now stop breeding after `mpMaxNumAttempts` completed nesting attempts even if the date cutoff hasn't arrived. Compiles clean; 17/17 tests pass. Recommend a validation run checking that few/no females exceed `mpMaxNumAttempts` clutch completions per year.
+
+## 2026-11-23 — Change: RENEST (actEvaluateRenesting) brought in line with the ODD — boundary operator, countdown timing, and false-start routing
+
+Three corrections in the RENEST stage (`LBVIAgent.java`) to match the ODD's actEvaluateRenesting description.
+
+1. **Boundary operator `>=` → `>`.** The ODD ends breeding only when today is *strictly greater than* `mpLastPossibleNestingDate` (renest is allowed when today `<=` it). The code used `>=`, which ended breeding one day early — on day == `mpLastPossibleNestingDate` it stopped the female although the ODD still permits a nest to start on that last possible day. (This is deliberately different from the DISPERSAL/pairing gate, which stays `>=`: "paired *by*" the deadline means an unpaired bird ends *at* it.)
+
+2. **Renesting countdown off-by-one.** The ODD decrements the countdown each day and starts nest building *on the day it reaches 0*. The old code only transitioned the step *after* it hit 0 (decrement in the `>0` branch, transition in a later step), so the effective wait was `mpRenestingIntervalDuration + 1` days. Restructured to decrement then test `<= 0` in the same step, so the wait is exactly `mpRenestingIntervalDuration` days.
+
+3. **False start now routes through renest evaluation (ODD trigger #3).** The ODD lists "abandoned during nest building (false start)" as a condition that triggers actEvaluateRenesting. Previously a false start kept the female in NESTBUILDING and she rebuilt immediately the next day, with no date check and no interval. Now a false start sets `nestCountdownToRenesting = mpRenestingIntervalDuration` and moves her to RENEST, so she re-checks the date (and ends breeding if past the last possible nesting date) and waits the renesting interval before building afresh. Unchanged and still correct: a false start does **not** increment the breeding-attempt counter.
+
+- **Files:** `src/main/java/lbvi/LBVIAgent.java` (RENEST case; nestBuilding false-start branch; two stale docstrings on `nestBuilding`/`abandonNestBeforeEggLaying`).
+- **Effect:** renesting timing now matches the ODD (one fewer wait day; renest allowed on the boundary day); a false start now costs a renest-interval delay and is subject to the end-of-season cutoff, instead of an immediate free rebuild. Compiles clean; 17/17 tests pass.
+- **KNOWN REMAINING MISMATCH (not changed, needs a team decision):** the RENEST case re-checks the date on *every* countdown day, whereas the ODD checks it *once* at the triggering event. So a renest countdown that starts on/before `mpLastPossibleNestingDate` but would finish after it gets cut short here (she ends breeding), while the ODD would let her complete the rebuild. Only matters for triggers within ~one renest-interval of the boundary. See ODD_correction 2026-11-23.
+
+## 2026-11-23 — Change: a female now ends her mate's breeding season (ODD actEndBreedingSeason), replacing the paired male's date gate
+
+Per the ODD — *"Each Vireo that completes the actEndBreedingSeason action schedules herself, and her mate, to execute… and releases the male from her control"* — a paired male's breeding season is now ended by his **mate**, not by a self-terminating date gate.
+
+- **New `endMateBreedingSeason(state)`** (`LBVIAgent.java`): when a **female** runs her end-of-season reset, she sends her current mate into `NONBREEDING` so he runs his own reset on his next step ("the next day"). No-op for a male caller, an unmated female, a mate that already left the simulation, or a mate that already reset this year (guard against clobbering a male already reset forward to `ARRIVAL`).
+- **Called at the top of the female's NONBREEDING reset block**, *before* her own old-age/winter-survival draw, so the mate is released even if she does not survive the winter.
+- **Removed the paired male's self-terminating date gate in NESTBUILDING** (`:263`). A paired male now simply parks in NESTBUILDING until his mate ends him — which also correctly covers a nest running past `mpLastPossibleNestingDate` (she ends him only once her own nesting finishes), instead of a fixed day-219 cutoff.
+- **Kept the unpaired male's PAIR gate** (`:252`, `mpLastPossibleNestingDate`): a male in PAIR is by definition unpaired (a female who pairs with him moves him to NESTBUILDING), so no female will ever end him — he still self-terminates at the ODD pairing deadline. This preserves the original "Bug A" fix (males no longer freeze) by a different, ODD-faithful mechanism.
+- **Side effect:** `endOfSeasonDate()` (the 219 = `mpLastPossibleNestingDate` + full nesting cycle helper) now has **no callers** and is dead code. Left in place for now pending a decision to remove or comment it out.
+- **Files:** `src/main/java/lbvi/LBVIAgent.java`.
+- **Effect:** paired males end their season exactly when their mate does (tracking a late nest), rather than on a fixed date; unpaired males/females still end at `mpLastPossibleNestingDate`. Compiles clean; 17/17 tests pass. Recommend a validation run watching that no male freezes in NESTBUILDING and that male/female end-of-season resets line up.
+
+## 2026-11-23 — Change: simplify ArrivalDate — sample the arrival date directly from the triangular distribution (drop the Poisson layer)
+
+`ArrivalDate.arrivalDate(lower, mode, upper)` previously drew a value from a triangular distribution and used it only as the lambda (mean) of a Poisson distribution, returning a Poisson draw. The team decided the extra Poisson step is unnecessary, so the arrival date is now the **triangular draw itself**, rounded to the nearest whole day.
+
+- Same mean, less noise: Triangular(a,c,b) already has mean `(a+c+b)/3`, so the Poisson layer never changed the expected date — it only added dispersion and could push dates outside `[a, b]`. The direct draw keeps the mean and guarantees the date stays within `[lower, upper]`.
+- **Contract unchanged:** same signature and return type; the `TriangularDistribution` constructor still validates argument ordering (same `NumberIsTooSmall/TooLargeException`s). All 4 existing `testArrivalDate` tests pass unchanged (non-negative, empirical mean ≈ `(a+c+b)/3` within ±3, invalid-ordering throws, CSV sample dump).
+- **Old method kept, commented out.** Per request, the previous two-step (triangular→Poisson) method is preserved as a comment block at the bottom of `ArrivalDate.java`, not deleted, so the team can restore it. The `PoissonDistribution` import is retained (with a note) for that reason. Note: if restored, it has the same signature as the active method, so one of the two must be removed/renamed to avoid a duplicate-method error.
+- **Files:** `src/main/java/lbvi/Utils/ArrivalDate.java` (method + class docstring).
+- **Effect:** arrival dates are now exactly within `[lower, upper]` and slightly less spread out than before (the Poisson over-dispersion is gone); the average arrival timing is unchanged. Compiles clean; 17/17 tests pass.
+
+## 2026-11-23 — Bug fix: a simulation-born bird's FIRST dispersal now uses the juvenile (natal) kernel/label
+
+Until now the juvenile dispersal kernels were never applied to any bird. A newborn sits out its natal year in NONBREEDING (Bug C fix) and the winter reset ages it into the **adult** age class before it ever disperses; since `dispersalKernel` and the dispersal-distance log both branched on `vireoAgeClassAdult`, every home-grown bird dispersed as an adult and the female-Weibull / male-2Dt(3.33,2.41) juvenile kernels sat unused.
+
+Fix: a one-shot per-agent marker `natalDispersalPending` makes a **simulation-born** bird's **first realized dispersal** use the juvenile kernel and be logged as `Juvenile`, without altering its actual age class (survival, breeding, aging stay adult; `AgeYears` still reports the true age — so a natal disperser logs `AgeYears=1, AgeClass=Juvenile`).
+
+- **Scope (team decision):** only the *first* recorded dispersal is juvenile. The marker is consumed when that dispersal is written to `logDispersalDistance.csv`, so any **later** dispersal — a re-dispersal the same season after a failed pairing, or any dispersal in a later year — uses the **adult** kernel/label. (`logDispersalDistance` fires only on a realized settle, so the search-retries while finding that first territory all remain juvenile; the flip happens at the first realized dispersal.)
+- **Input (startup) birds are never affected** (marker defaults false): they are established adults and skip dispersal in year 1 anyway.
+- Applies to **both sexes** (a male's first territory-defence dispersal is juvenile too).
+- **Implementation** (`LBVIAgent.java`): new field `natalDispersalPending` (set true in `reproduceAgent` for newborns); `dispersalKernel` computes `adultDispersal = vireoAgeClassAdult && !natalDispersalPending` and branches on it; `logDispersalDistance` labels AgeClass by the same `adultDispersal` and then consumes the marker. The archived `@Deprecated dispersalKernel_old` was left untouched.
+- **Effect:** `logDispersalDistance.csv` will now contain `Juvenile` rows (the yearling natal dispersers), and the juvenile kernels are finally exercised. No change to age class, survival, or breeding. Compiles clean; 17/17 tests pass.
+
+## 2026-11-23 — Docs: clarify loadInitVireoPopulation docstring (input CSV lost PopID/IsSelected columns — no code change needed)
+
+The team removed the `PopID` and `IsSelected` columns from `inVireoPopulation2020.csv`. No code change is required: `loadInitVireoPopulation` reads only the `TerrID` column, located by header name, and ignores all other columns regardless of order, so dropping those two columns has no effect.
+
+- Updated the `loadInitVireoPopulation` Javadoc (`LBVIEnvironment.java`), which stale-ly described the file as single-column with a `terrID` column. It now states that only `TerrID` is read (by name), that other columns (PatchID, POINT_X, POINT_Y, Q20, …) are ignored, and that order doesn't matter. Comment-only; no behaviour change.
+
+## 2026-11-23 — Feature: load model parameters from a CSV file (run a configuration without retyping the Model tab)
+
+Adds a way to drive a run from a parameter file instead of entering every `mp*` value by hand in the Model tab. The file uses the **same `parameter,value` format** that `paramList.csv` already emits, so a run's own snapshot round-trips: run once → copy the emitted `paramList.csv` → edit values → feed it back.
+
+- **New optional input field** `paramFilePath` (default `""`) in `LBVIEnvironment`, with `get/setParamFilePath` so it appears in the Model tab. Blank/null = keep the in-code / Model-tab values (no behaviour change for existing runs).
+- **New `loadParameterList(String csvPath)`** — the symmetric inverse of `writeParameterList()`. Reads the `parameter,value` CSV (header row optional) and sets each field by reflection. Acceptance mirrors the writer's keep-rule exactly: a row is applied only if the field exists, is non-static, and its name starts with `mp` (or is `lowerArrivalDate`/`upperArrivalDate`/`modeArrivalDate`). The four per-run **drawn** survival probabilities are never set here (they are outputs drawn in `start()` from their hyperparameters, which *are* loadable). Supported types: `double, int, long, boolean, String, double[], int[]`. Unknown names, non-loadable fields, and unparseable values are each skipped with a warning; a missing file warns and falls back to defaults rather than aborting. Prints an `N applied, M skipped` summary.
+- **Hook:** called at the very top of `start()`, ahead of the survival draws and output setup, so loaded values take effect everywhere (and the emitted `paramList.csv` reflects what was actually used).
+- **New headless entry point** `LBVIEnvironment.main(String[] args)` — runs the model with no GUI: `java lbvi.LBVIEnvironment [paramFile.csv] [seed]`. Steps until the `LBVIObserver` kill boundary, then finishes. The GUI (`LBVIWorldWithUI.main`) is unchanged; a GUI user can instead type a path into the Model tab's `paramFilePath`.
+- **Not a parameter sweep.** This is the single-config loader only (one file → one run). A sweep/batch harness (one file → many runs, replicate seeds, per-run output folders) was explicitly deferred; it would be built on top of this loader by calling the headless runner once per configuration.
+- **Files:** `src/main/java/lbvi/LBVIEnvironment.java` (field + getter/setter + `loadParameterList` and helpers + `start()` hook + `main`).
+- **Effect:** no change to default runs (field blank). Compiles clean; 17/17 tests pass. Not yet exercised by an end-to-end headless run (would overwrite working-dir output CSVs) — recommend a short smoke run before relying on it for production.
+
 ## 2026-11-23 — Change: "false start" events now logged to logMortalityEvents.csv instead of logSuccessEvents.csv
 
 The team considers a "false start" (a nest abandoned before egg-laying) a loss, not a success, so it now goes to the mortality file. "nest completion" stays in the success file.

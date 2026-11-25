@@ -77,7 +77,17 @@ public class OutputWriter {
             }
             //Wherever you're getting the file name for writing, set mustExist = false
             //if you are reading a file, like input config, set mustExist = true
-            File target = new File(baseDir, fileName);
+            // An ABSOLUTE fileName is used as-is (so a user can point at data/outputs anywhere on their
+            // machine, e.g. from the parameter CSV); a RELATIVE fileName is resolved against baseDir as before.
+            File fileNameFile = new File(fileName);
+            File target = fileNameFile.isAbsolute() ? fileNameFile : new File(baseDir, fileName);
+            // Legacy fallback: an absolute-looking INPUT path that does not exist may be an old value like
+            // "/RESET_LBVI_inputData/..." that was historically resolved relative to baseDir (Java's
+            // File(baseDir, "/x") drops the leading slash). Retry that way so older configs keep working.
+            if (mustExist && !target.exists() && fileNameFile.isAbsolute()) {
+                File rel = new File(baseDir, fileName);
+                if (rel.exists()) target = rel;
+            }
             if (mustExist && !target.exists()) {
                 throw new IOException("File not found: " + target.getAbsolutePath());
             }

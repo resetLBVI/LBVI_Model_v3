@@ -7,6 +7,110 @@ unless stated otherwise — most entries here bring the ODD text in line with th
 
 ---
 
+## 2026-11-23 — End of season: max-nesting-attempts trigger now wired (ODD actEndBreedingSeason trigger b)
+
+**Status:** the *code* was brought INTO LINE with the ODD; one naming point to confirm with the team.
+**Section:** actEndBreedingSeason (the two end-of-season triggers) and the state-variable glossary (attempt counters).
+
+### What changed in the code
+
+The ODD ends a Vireo's breeding season when `vireoNumNestingAttempts == mpVireoMaxNumAttempts`, in addition to the date trigger. This was previously not enforced as a transition; it is now checked in RENEST (a female whose completed-nesting-attempt count reaches `mpMaxNumAttempts` goes to NONBREEDING), and the NONBREEDING reset guard uses the same counter. See CHANGELOG 2026-11-23.
+
+### Point to confirm with the team (Casey)
+
+The code has two attempt counters: `vireoNumNestAttempts` (incremented at clutch completion — every attempt reaching incubation, success or failure; false starts excluded) and `vireoCurrentNumAttempts` (incremented only at fledgling independence — successful attempts). The wiring uses `vireoNumNestAttempts`, matching the ODD variable name `vireoNumNestingAttempts` and the usual meaning of "nesting attempts." If the ODD intends successful attempts only, switch both sites to `vireoCurrentNumAttempts`. The ODD glossary should state explicitly which definition `vireoNumNestingAttempts` carries (recommend: attempts that reached a completed clutch, excluding false starts, per the ODD's own note that false starts do not count).
+
+### Why it matters for the ODD
+
+Trigger (b) now actually ends seasons, so model behavior matches the ODD text. The only open item is the precise definition of "nesting attempts," which the ODD glossary should pin down.
+
+---
+
+## 2026-11-23 — Renesting (actEvaluateRenesting): boundary operator, countdown timing, false-start routing aligned to ODD; one mismatch remains
+
+**Status:** the *code* was brought INTO LINE with the ODD on three points; one mismatch remains and needs a team decision.
+**Section:** actEvaluateRenesting (renesting sub-model).
+
+### What changed in the code
+
+1. End-of-breeding test changed from `today >= mpVireoLastPossibleNestingDate` to `today > ...` — a nest may still be started ON the last possible nesting date, per the ODD ("greater than" ends breeding; "less than or equal to" renests).
+2. The renesting-interval countdown now starts nest building on the day it reaches 0 (was the day after), so the wait equals `mpVireoRenestingIntervalDuration` exactly (was interval + 1).
+3. A false start now triggers renest evaluation (RENEST) as the ODD specifies (condition 3), instead of an immediate same-cycle rebuild in NESTBUILDING; it still does not count as a breeding attempt.
+
+See CHANGELOG 2026-11-23.
+
+### Per-day date re-check — DECIDED 2026-11-23: keep per-day (update the ODD text to match)
+
+The ODD checks the date **once**, at the moment actEvaluateRenesting is triggered: if `today <= mpVireoLastPossibleNestingDate` the female commits to the renest and completes it after the interval, even if the rebuild day lands past the last possible nesting date. The code instead re-checks the date on **every** countdown day (the RENEST stage runs each day), so a renest countdown that begins on/before the last possible nesting date but would finish after it is cut short (the female ends breeding). This only affects triggers within about one renesting-interval of the boundary.
+
+**Team decision (2026-11-23): keep the per-day re-check** — the stricter behavior, so that no nest ever *starts* after `mpVireoLastPossibleNestingDate`. No code change (the code already does this). **ODD action:** update the actEvaluateRenesting text to say the female re-evaluates today's date against `mpVireoLastPossibleNestingDate` on each countdown day (not only once at the triggering event), and ends the season if the date passes the cutoff before the renest interval elapses.
+
+### Why it matters for the ODD
+
+Points 1–3 remove code/ODD mismatches, so no ODD wording change is needed there. The remaining item is a genuine modelling choice; the ODD and code should be reconciled once the team picks (a) or (b).
+
+---
+
+## 2026-11-23 — End of breeding season: the female now ends her mate's season (was a male date gate)
+
+**Status:** the *code* was brought INTO LINE with the ODD; this entry records the alignment.
+**Section:** actEndBreedingSeason (end-of-breeding-season sub-model) and the male scheduling description.
+
+### What changed in the code
+
+The ODD states that a Vireo completing actEndBreedingSeason "schedules herself, and her mate, to execute [the end-of-season actions]… and releases the male from her control." The code now implements this: when a female runs her end-of-season (NONBREEDING) reset, she sends her mate into his own end-of-season reset (`endMateBreedingSeason`). The paired male's former self-terminating date gate was removed. An **unpaired** male (parked in PAIR, no female ever settled) still ends himself at `mpVireoLastPossibleNestingDate`, consistent with the ODD's pairing-deadline rule. See CHANGELOG 2026-11-23.
+
+### Why it matters for the ODD
+
+This removes a prior code/ODD mismatch (the male independently self-terminating on a date rather than being released by his mate), so no ODD wording change is needed for the actEndBreedingSeason mate-release step — the code now matches it. If the ODD's process-overview or scheduling text describes the male ending his own season on a date, align it to say the female ends her mate's season (the male runs his end-of-season actions the next day). Note: a bird with an active nest or in fledging care still continues past `mpVireoLastPossibleNestingDate` and ends when its nesting concludes — unchanged and consistent with the ODD exemption.
+
+---
+
+## 2026-11-23 — Arrival date: drawn directly from the triangular distribution (Poisson step removed)
+
+**Status:** the *code* changed; any ODD description of how the arrival date is drawn must be brought in line.
+**Section:** the arrival sub-model (arrival-date distribution) and any equations/parameters describing it.
+
+### What changed in the code
+
+`ArrivalDate.arrivalDate(lower, mode, upper)` previously sampled a value from a triangular distribution and used it as the mean (lambda) of a Poisson distribution, returning the Poisson draw. It now returns the triangular draw itself, rounded to the nearest day. The triangular parameters are unchanged (lower = `mpVireoFirstDate`/`lowerArrivalDate`, mode = `mpVireoPeakDate`/`modeArrivalDate`, upper = `mpVireoLastDate`/`upperArrivalDate`). See CHANGELOG 2026-11-23.
+
+### Why it matters for the ODD
+
+If the ODD states that the arrival date is a Poisson draw whose mean is a triangular sample (a two-step process), that no longer holds: the arrival date is now a single triangular draw. The expected arrival date is unchanged (triangular mean `(a+c+b)/3`), but the date is now guaranteed to lie within `[lower, upper]` and has less dispersion than the old Poisson-mixed version. Update the arrival-date equation/description accordingly and drop any mention of the Poisson step.
+
+---
+
+## 2026-11-23 — Dispersal: a natal-born bird's first dispersal is a juvenile (natal) dispersal
+
+**Status:** the *code* changed; any ODD description of which dispersal kernel each bird uses must be brought in line.
+**Section:** the dispersal sub-model (age/sex-specific dispersal kernels) and any text on natal vs breeding dispersal.
+
+### What changed in the code
+
+Because a simulation-born bird sits out its natal year in a non-breeding state and the winter reset ages it into the **adult** age class before its first breeding season, every home-grown bird was dispersing with the **adult** kernel — the juvenile kernels were never used. The code now treats a simulation-born bird's **first realized dispersal** as a juvenile (natal) dispersal: it uses the juvenile dispersal kernel and is recorded with `AgeClass = Juvenile` in `logDispersalDistance.csv`, even though the bird is in the adult age class (its age class, survival, aging and breeding are unchanged; `AgeYears` still shows the true age, typically 1). Only the first dispersal is juvenile — any later dispersal (a re-dispersal after a failed pairing, or a dispersal in a later year) uses the adult kernel. Startup (input) birds are unaffected. See CHANGELOG 2026-11-23.
+
+### Why it matters for the ODD
+
+If the ODD maps dispersal kernels strictly to the age *class* (adult vs juvenile), that no longer matches the implementation: the first dispersal of a natal bird uses the **juvenile** kernel despite the bird being classed adult. The sub-model should state that natal (first) dispersal uses the juvenile kernel and subsequent (breeding) dispersal uses the adult kernel, and that this natal-dispersal distinction is a dispersal-categorisation only — it does not change the bird's age class. This is also the first time the juvenile dispersal kernels are actually exercised, which the ODD's dispersal-parameterisation text should acknowledge.
+
+---
+
+## 2026-11-23 — Input data: parameters can now be loaded from a CSV (optional), and the model has a headless runner
+
+**Status:** the *code* gained a feature; update the ODD only if it documents how parameters are supplied / how the model is run.
+**Section:** "Input data" / "Initialization" (how model parameters are set), and any run/implementation notes.
+
+### What changed in the code
+
+Model parameters can optionally be loaded from a `parameter,value` CSV (the same format the reproducibility snapshot `paramList.csv` is written in) via a new `paramFilePath` field and `loadParameterList()`, applied at the top of `start()`. A new headless entry point (`LBVIEnvironment.main`) runs the model without the GUI, taking the parameter file and an optional seed as command-line arguments. When `paramFilePath` is blank, behaviour is identical to before (defaults / Model-tab values). See CHANGELOG 2026-11-23.
+
+### Why it matters for the ODD
+
+No model dynamics change. But if the ODD states that parameters are entered through the GUI Model tab (or only via code defaults), it can note that a configuration may instead be supplied as a CSV and that the model can be run headless (batch) from the command line. This does **not** add a parameter-sweep capability — it is single-configuration loading; a sweep would be a separate harness built on top.
+
+---
+
 ## 2026-11-23 — Output files: "false start" events moved from the success log to the mortality log
 
 **Status:** the *code* changed; any ODD description of where false-start events are recorded must be brought in line.

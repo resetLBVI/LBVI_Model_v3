@@ -38,8 +38,8 @@ import java.util.Map;
 
 public class LBVIEnvironment extends SimState {
     //setup input and output files path
-    public String shpFilePath = "/RESET_LBVI_inputData/RESET_merge_final.shp"; //* for background image use
-    public String vegAttributePath = "/RESET_LBVI_inputData/inTerritories2020.csv"; //*
+    public String shpFilePath = "RESET_LBVI_inputData/RESET_merge_final.shp"; //* for background image use
+    public String vegAttributePath = "RESET_LBVI_inputData/inTerritories2020.csv"; //*
     public String groundwaterFilePath = "RESET_LBVI_inputData/inGroundwaterBAU.csv"; //*
     public String trapPlanFilePath = "RESET_LBVI_inputData/inCowbirdTrapsRecent2020.csv"; //*
     public String initVireoPopulationFilePath = "RESET_LBVI_inputData/inVireoPopulation2020.csv"; //*
@@ -56,6 +56,12 @@ public class LBVIEnvironment extends SimState {
     public String logCowbirdArrivalOrDepartureFile = "logCowbirdArrivalOrDeparture.csv"; //*
     public String logDispersalOutcomeFile = "logDispersalOutcome.csv"; // TEMP DIAGNOSTIC (remove after non-breeding investigation; see note temp-dispersal-outcome-logging)
     public String paramListFilePath = "paramList.csv"; //* run parameter snapshot (reproducibility)
+    // OPTIONAL input. Path to a parameter CSV in the SAME "parameter,value" format that paramListFilePath
+    // writes out. Blank/null = use the default (or Model-tab) values. When set, it is loaded at the very top
+    // of start() and overrides the in-code defaults, so the team can run a configuration by editing a file
+    // instead of retyping each value in the Model tab. Round-trips: run once, copy the emitted paramList.csv,
+    // edit the values, point paramFilePath at your edited copy, and re-run.
+    public String paramFilePath = "";
     public OutputWriter debugWriter; //this is a writer method class that helps us to wirte the logs
     public OutputWriter logMortalityWriter;
     public OutputWriter logSuccessWriter;
@@ -237,9 +243,50 @@ public class LBVIEnvironment extends SimState {
     }
     //end of Constructor
 
+    /**
+     * Headless / command-line entry point: run the model WITHOUT the GUI window, configured by a parameter
+     * file. "Headless" = no Model tab, no map, no play button - it runs straight through and writes the output
+     * CSVs, so a run can be launched from a terminal or a shell/R/Python script.
+     *
+     *   java lbvi.LBVIEnvironment [paramFile.csv] [seed]
+     *
+     *   paramFile.csv  optional - a "parameter,value" CSV (see loadParameterList); omit or "" to use the
+     *                  in-code defaults. A file emitted as paramList.csv round-trips directly.
+     *   seed           optional long; defaults to System.currentTimeMillis().
+     *
+     * Run length comes from mpInputSimulationDurationYears (which the param file may itself override); the
+     * LBVIObserver calls kill() at the final year, so the loop below ends on its own. Output CSVs are written
+     * just as in a GUI run. (This is the single-config runner; it is NOT a parameter sweep - to sweep, call it
+     * once per configuration from a script, each with its own paramFile and seed.)
+     */
+    public static void main(String[] args) {
+        String paramFile = (args.length >= 1) ? args[0] : "";
+        long seed = (args.length >= 2) ? Long.parseLong(args[1]) : System.currentTimeMillis();
+
+        LBVIEnvironment state = new LBVIEnvironment(seed);
+        state.paramFilePath = paramFile;
+        state.start();
+
+        System.out.println("Headless run started: seed=" + seed
+                + ", paramFile=" + (paramFile.isEmpty() ? "(none; using defaults)" : paramFile)
+                + ", durationYears=" + state.mpInputSimulationDurationYears);
+
+        // The Observer's kill() clears the schedule at the final year, so schedule.step() then returns false.
+        // The step cap is only a safety net in case no Observer is driving termination for a given config.
+        long maxSteps = (long) state.mpInputSimulationDurationYears * 364L + 10L;
+        while (state.schedule.getSteps() < maxSteps && state.schedule.step(state)) {
+            // advance one day per iteration
+        }
+        state.finish();
+        System.out.println("Headless run complete at step " + state.schedule.getSteps() + ".");
+    }
+
 
     public void start(){
         super.start();
+        // OPTIONAL: override the in-code / Model-tab parameter values from a CSV before anything uses them.
+        // Must happen here, ahead of the survival draws (which read the hyperparameters) and output setup.
+        loadParameterList(this.paramFilePath);
         // Draw the four survival probabilities once for this run (parameter uncertainty).
         // Reproducibility: seed a Commons Math generator with MASON's run seed (this.seed()) so that
         // running the model with the same seed always yields the same four survival values. All four
@@ -443,12 +490,15 @@ public class LBVIEnvironment extends SimState {
      */
     public void loadVegAttributes(String csvPath) throws IOException {
         try (BufferedReader br = new BufferedReader(new FileReader(csvPath))) {
-            String headerLine = br.readLine();
+            String headerLine = stripBom(br.readLine());
             if (headerLine == null) throw new IOException("Vegetation attribute CSV is empty: " + csvPath);
             // build column-name → index map from header
             String[] headers = headerLine.split(",", -1);
             Map<String, Integer> col = new HashMap<>();
             for (int i = 0; i < headers.length; i++) col.put(headers[i].trim().replace("\"", ""), i);
+            requireColumns(col, "Vegetation attribute CSV", csvPath,
+                    "PatchID", "TerrID", "POINT_X", "POINT_Y", "Acres", "MapCode", "MapUnit", "VegName",
+                    "pTrWillow", "pShWillowM", "pArundo", "pTamarisk", "Quality", "VegHealth");
             int count = 0;
             String line;
             while ((line = br.readLine()) != null) {
@@ -502,12 +552,14 @@ public class LBVIEnvironment extends SimState {
      */
     public void loadGroundwaterData(String csvPath) throws IOException {
         try (BufferedReader br = new BufferedReader(new FileReader(csvPath))) {
-            String headerLine = br.readLine();
+            String headerLine = stripBom(br.readLine());
             if (headerLine == null) throw new IOException("Groundwater CSV is empty: " + csvPath);
             // build column-name → index map from header
             String[] headers = headerLine.split(",", -1);
             Map<String, Integer> col = new HashMap<>();
             for (int i = 0; i < headers.length; i++) col.put(headers[i].trim(), i);
+            requireColumns(col, "Groundwater CSV", csvPath,
+                    "PatchID", "year", "DGW", "WaterYearType", "WaterStress");
             int count = 0;
             String line;
             while ((line = br.readLine()) != null) {
@@ -533,6 +585,22 @@ public class LBVIEnvironment extends SimState {
      * survival probabilities (mpSurvivalProb{Juvenile,Adult}{M,F}) are outputs, not user inputs, and
      * are excluded (their hyperparameters are captured instead). Overwrites the file each run.
      */
+    /**
+     * Input data-file path fields that may be read from / written to the parameter CSV, in addition to the
+     * mp* parameters and the three arrival-date fields. These are the five files start() actually loads, so a
+     * colleague can point the model at their own copies from the parameter file instead of the Model tab.
+     * A path may be relative (resolved against the run base directory, as the defaults are) or absolute
+     * (used as-is; see OutputWriter.getFileName). The log OUTPUT file fields and paramListFilePath/paramFilePath
+     * are intentionally excluded; tlbFilePath/pshbFilePath are declared but never read, so they are excluded too.
+     */
+    private static boolean isInputPathParam(String name) {
+        return name.equals("shpFilePath")
+                || name.equals("vegAttributePath")
+                || name.equals("groundwaterFilePath")
+                || name.equals("trapPlanFilePath")
+                || name.equals("initVireoPopulationFilePath");
+    }
+
     public void writeParameterList(String csvPath) {
         java.lang.reflect.Field[] fields = LBVIEnvironment.class.getDeclaredFields();
         java.util.Arrays.sort(fields, java.util.Comparator.comparing(java.lang.reflect.Field::getName));
@@ -550,7 +618,11 @@ public class LBVIEnvironment extends SimState {
                 boolean keep = (name.startsWith("mp")
                         || name.equals("lowerArrivalDate")
                         || name.equals("upperArrivalDate")
-                        || name.equals("modeArrivalDate"))
+                        || name.equals("modeArrivalDate")
+                        || isInputPathParam(name)
+                        // paramFilePath: write-only, for the record of WHICH config file drove this run. It is
+                        // deliberately NOT in isInputPathParam (and so not loadable) - see loadParameterList.
+                        || name.equals("paramFilePath"))
                         && !drawnSurvivalProb;
                 if (!keep || java.lang.reflect.Modifier.isStatic(f.getModifiers())) continue;
                 f.setAccessible(true);
@@ -576,6 +648,181 @@ public class LBVIEnvironment extends SimState {
     }
 
     /**
+     * Load model parameters from a CSV and override the in-code defaults. This is the symmetric inverse of
+     * writeParameterList(): it reads the exact same "parameter,value" format (optionally with the
+     * "parameter,value" header row) and sets each matching field by reflection, so a run can be configured by
+     * editing a file instead of the Model tab. A file produced by writeParameterList() round-trips directly.
+     *
+     * Acceptance mirrors writeParameterList()'s keep-rule: a row is applied only if its field exists, is
+     * non-static, and its name starts with "mp" or is one of lowerArrivalDate/upperArrivalDate/modeArrivalDate.
+     * The four per-run DRAWN survival probabilities (mpSurvivalProb{Juvenile,Adult}{M,F}) are never set here —
+     * they are outputs drawn in start() from their hyperparameters (which ARE loaded) and are excluded from the
+     * snapshot anyway. Supported types: double, int, long, boolean, String, double[], int[].
+     *
+     * Robustness: a blank/null path is a no-op (defaults are kept). A missing file logs a warning and leaves
+     * defaults in place rather than aborting. Unknown names, non-accepted fields, and unparseable values are
+     * each skipped with a warning; everything else is applied. Must be called BEFORE the parameters are used —
+     * i.e. at the top of start(), ahead of the survival draws and output setup.
+     *
+     * @param csvPath path to the parameter CSV (blank/null = keep defaults)
+     */
+    public void loadParameterList(String csvPath) {
+        if (csvPath == null || csvPath.trim().isEmpty()) {
+            return; // no file supplied: keep the in-code / Model-tab values
+        }
+        java.io.File file = new java.io.File(csvPath);
+        if (!file.isFile()) {
+            System.out.println("WARNING: paramFilePath not found, using default parameter values: " + csvPath);
+            return;
+        }
+        int applied = 0, skipped = 0;
+        try (java.io.BufferedReader br = new java.io.BufferedReader(new java.io.FileReader(file))) {
+            String line;
+            boolean firstLine = true;
+            while ((line = br.readLine()) != null) {
+                if (line.trim().isEmpty()) continue;
+                if (firstLine) line = stripBom(line); // a BOM sits on the first line; strip so the first name matches
+                // Split on the FIRST comma only: a parameter name is always a plain identifier (no comma),
+                // and the value may itself contain commas only inside quotes (handled by stripQuotes).
+                int comma = line.indexOf(',');
+                if (comma < 0) continue;
+                String name = line.substring(0, comma).trim();
+                String rawValue = stripQuotes(line.substring(comma + 1).trim());
+                // Skip the header row emitted by writeParameterList().
+                if (firstLine && name.equals("parameter")) { firstLine = false; continue; }
+                firstLine = false;
+
+                // paramFilePath is WRITTEN into the snapshot (which config file this run used) but is NOT
+                // loadable: this file is already open and being read, so setting it here would do nothing but
+                // make the output snapshot misreport the file that was actually loaded. Skip it quietly (no
+                // warning, not counted as "skipped") so loading an unedited snapshot stays clean.
+                if (name.equals("paramFilePath")) continue;
+
+                java.lang.reflect.Field f;
+                try {
+                    f = LBVIEnvironment.class.getDeclaredField(name);
+                } catch (NoSuchFieldException e) {
+                    System.out.println("  paramFile: unknown parameter '" + name + "' - skipped");
+                    skipped++;
+                    continue;
+                }
+                boolean drawnSurvivalProb = name.equals("mpSurvivalProbJuvenileM")
+                        || name.equals("mpSurvivalProbJuvenileF")
+                        || name.equals("mpSurvivalProbAdultM")
+                        || name.equals("mpSurvivalProbAdultF");
+                boolean accept = (name.startsWith("mp")
+                        || name.equals("lowerArrivalDate")
+                        || name.equals("upperArrivalDate")
+                        || name.equals("modeArrivalDate")
+                        || isInputPathParam(name))
+                        && !drawnSurvivalProb;
+                if (!accept || java.lang.reflect.Modifier.isStatic(f.getModifiers())) {
+                    System.out.println("  paramFile: '" + name + "' is not a loadable parameter - skipped");
+                    skipped++;
+                    continue;
+                }
+                try {
+                    setFieldFromString(f, rawValue);
+                    applied++;
+                } catch (Exception e) {
+                    System.out.println("  paramFile: could not set '" + name + "' = '" + rawValue + "' ("
+                            + e.getMessage() + ") - skipped");
+                    skipped++;
+                }
+            }
+        } catch (IOException e) {
+            System.out.println("WARNING: failed to read paramFilePath (" + csvPath + "): " + e
+                    + " - using whatever was applied plus defaults");
+        }
+        System.out.println("Parameters loaded from " + csvPath + ": " + applied + " applied, " + skipped + " skipped.");
+    }
+
+    /** Remove one layer of CSV double-quoting (as written by formatParamValue), if present. */
+    private static String stripQuotes(String s) {
+        if (s.length() >= 2 && s.startsWith("\"") && s.endsWith("\"")) {
+            return s.substring(1, s.length() - 1).replace("\"\"", "\"");
+        }
+        return s;
+    }
+
+    /**
+     * Remove a leading UTF-8 BOM (U+FEFF) from a line if present, returning the line otherwise.
+     * Excel and many Windows editors prepend a BOM when saving a CSV as UTF-8; it ends up as the
+     * first character of the first line of the file. String.trim() does NOT strip U+FEFF, so without
+     * this the BOM stays glued to the first field (a header name, or for the parameter file the first
+     * parameter name), making that field impossible to match by name. Every CSV input loader runs its
+     * first line through this so colleagues' hand-made CSVs load regardless of editor/encoding.
+     * Null-safe: a null line (empty file) is returned unchanged.
+     */
+    private static String stripBom(String line) {
+        return (line != null && !line.isEmpty() && line.charAt(0) == '﻿') ? line.substring(1) : line;
+    }
+
+    /**
+     * Verify that the parsed header map contains every required column, and fail with a clear,
+     * actionable message if not. Without this a missing or misspelled column surfaces only later as a
+     * raw NullPointerException (col.get(name) returns null, then .intValue()/parse blows up) that points
+     * at a line number instead of the real problem. Column matching is case-sensitive and exact, so the
+     * message also lists what WAS found to make a typo/case mismatch obvious.
+     *
+     * @param col       header-name → index map built from the CSV header row
+     * @param fileLabel human-readable name of the file for the message (e.g. "Vegetation attribute CSV")
+     * @param csvPath   path to the file, included in the message
+     * @param required  the column names the loader needs
+     */
+    private static void requireColumns(Map<String, Integer> col, String fileLabel, String csvPath,
+                                       String... required) throws IOException {
+        java.util.List<String> missing = new java.util.ArrayList<>();
+        for (String name : required) if (!col.containsKey(name)) missing.add(name);
+        if (!missing.isEmpty()) {
+            throw new IOException(fileLabel + " is missing required column(s): " + missing
+                    + ". Columns found: " + col.keySet()
+                    + ". Check the header row (names are case-sensitive and must match exactly). File: " + csvPath);
+        }
+    }
+
+    /** Set a single field from its string form, dispatching on the field's declared type. */
+    private void setFieldFromString(java.lang.reflect.Field f, String v) throws IllegalAccessException {
+        f.setAccessible(true);
+        Class<?> t = f.getType();
+        if (t == double.class)        f.setDouble(this, Double.parseDouble(v));
+        else if (t == int.class)      f.setInt(this, Integer.parseInt(v));
+        else if (t == long.class)     f.setLong(this, Long.parseLong(v));
+        else if (t == boolean.class)  f.setBoolean(this, Boolean.parseBoolean(v));
+        else if (t == String.class)   f.set(this, v);
+        else if (t == double[].class) f.set(this, parseDoubleArray(v));
+        else if (t == int[].class)    f.set(this, parseIntArray(v));
+        else throw new IllegalArgumentException("unsupported type " + t.getSimpleName());
+    }
+
+    /** Parse "[a; b; c]" (the formatParamValue array form) into a double[]. */
+    private static double[] parseDoubleArray(String v) {
+        String[] parts = arrayElements(v);
+        double[] out = new double[parts.length];
+        for (int i = 0; i < parts.length; i++) out[i] = Double.parseDouble(parts[i]);
+        return out;
+    }
+
+    /** Parse "[a; b; c]" (the formatParamValue array form) into an int[]. */
+    private static int[] parseIntArray(String v) {
+        String[] parts = arrayElements(v);
+        int[] out = new int[parts.length];
+        for (int i = 0; i < parts.length; i++) out[i] = Integer.parseInt(parts[i]);
+        return out;
+    }
+
+    private static String[] arrayElements(String v) {
+        String body = v.trim();
+        if (body.startsWith("[")) body = body.substring(1);
+        if (body.endsWith("]"))   body = body.substring(0, body.length() - 1);
+        body = body.trim();
+        if (body.isEmpty()) return new String[0];
+        String[] parts = body.split(";");
+        for (int i = 0; i < parts.length; i++) parts[i] = parts[i].trim();
+        return parts;
+    }
+
+    /**
      * Reads cowbird trap plan data from a CSV file and populates trapInfo (one entry per CSV row,
      * i.e. per trap per year).
      * All years are loaded upfront. Use logisticFunForCapture.findOpenTraps(state) at runtime
@@ -589,12 +836,13 @@ public class LBVIEnvironment extends SimState {
      */
     public void loadTrapPlan(String csvPath) throws IOException {
         try (BufferedReader br = new BufferedReader(new FileReader(csvPath))) {
-            String headerLine = br.readLine();
+            String headerLine = stripBom(br.readLine());
             if (headerLine == null) throw new IOException("Trap plan CSV is empty: " + csvPath);
             // build column-name → index map from header
             String[] headers = headerLine.split(",", -1);
             Map<String, Integer> col = new HashMap<>();
             for (int i = 0; i < headers.length; i++) col.put(headers[i].trim(), i);
+            requireColumns(col, "Trap plan CSV", csvPath, "TrapID", "POINT_X", "POINT_Y", "Year");
             int count = 0;
             String line;
             while ((line = br.readLine()) != null) {
@@ -613,22 +861,25 @@ public class LBVIEnvironment extends SimState {
     }
 
     /**
-     * Reads the initial Vireo population from a single-column CSV and populates initVireoTerrIDs.
-     * Each row represents one territory occupied at simulation start.
+     * Reads the initial Vireo population CSV and populates initVireoTerrIDs. Each data row represents one
+     * territory occupied at simulation start.
      *
-     * Expected CSV column (with header row):
-     *   terrID
+     * Only the "TerrID" column is used; it is located by header name, so any other columns the file carries
+     * (e.g. PatchID, POINT_X, POINT_Y, Q20) are ignored and the column order does not matter. A terrID that is
+     * not present in the vegetation data is skipped with a warning. A UTF-8 BOM on the header line is tolerated.
+     *
+     * Expected CSV: a header row that includes a "TerrID" column (other columns optional).
      *
      * @param csvPath path to the initial Vireo population CSV (initVireoPopulationFilePath)
      */
     public void loadInitVireoPopulation(String csvPath) throws IOException {
         try (BufferedReader br = new BufferedReader(new FileReader(csvPath))) {
-            String headerLine = br.readLine();
+            String headerLine = stripBom(br.readLine());
             if (headerLine == null) throw new IOException("Init Vireo population CSV is empty: " + csvPath);
-            if (headerLine.startsWith("﻿")) headerLine = headerLine.substring(1); // strip UTF-8 BOM
             String[] headers = headerLine.split(",", -1);
             Map<String, Integer> col = new HashMap<>();
             for (int i = 0; i < headers.length; i++) col.put(headers[i].trim(), i);
+            requireColumns(col, "Init Vireo population CSV", csvPath, "TerrID");
             int count = 0;
             String line;
             while ((line = br.readLine()) != null) {
@@ -874,6 +1125,10 @@ public class LBVIEnvironment extends SimState {
 
     public String getLogCowbirdArrivalOrDepartureFile() { return logCowbirdArrivalOrDepartureFile; }
     public void setLogCowbirdArrivalOrDepartureFile(String val) { this.logCowbirdArrivalOrDepartureFile = val; }
+
+    // --- optional parameter-file input (Model tab: leave blank to use the values shown here) ---
+    public String getParamFilePath() { return paramFilePath; }
+    public void setParamFilePath(String val) { this.paramFilePath = val; }
 
     // --- LBVI arrival model parameters ---
     public int getLowerArrivalDate() { return lowerArrivalDate; }
