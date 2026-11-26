@@ -1,0 +1,45 @@
+{
+  "_comment": "PORTABLE LBVI sweep config: all paths are RELATIVE, so this works on any machine as long as everything sits in ONE folder (see README_sweep.txt). When you assemble the distribution folder, RENAME this file to sweep_config.json so 'python run_sweep.py' finds it automatically.",
+
+  "jar": "RESET_LBVI.jar",
+  "_jar_note": "Name of the jar in this folder. Rename your built jar to RESET_LBVI.jar, OR change this line to match your jar's filename.",
+
+  "base_params": "paramListDefault.csv",
+  "_base_params_note": "Baseline for EVERY run (your single source of truth for all parameters), read from this folder. Precedence per run: base_params -> fixed -> swept value. Set to \"\" to use the model's in-code defaults instead. The input-file paths in 'fixed' below override whatever paths this baseline contains.",
+
+  "seeds": [42],
+  "seed_per_run": true,
+  "_seed_note": "seed_per_run=true gives each run its own reproducible seed = seeds[0] + runIndex. Set false to run every seed in 'seeds' against every parameter set (cartesian).",
+
+  "mode": "one_at_a_time",
+  "_mode_options": [
+    "one_at_a_time  : vary one parameter while all others stay at their first (baseline) value",
+    "full_factorial : run every combination of all sweep values (can be large!)"
+  ],
+
+  "_sweep_note": "Each sweep value is a list, OR {\"range\": [start, stop]} (stop exclusive, like Python range) / {\"range\": [start, stop, step]}. In one_at_a_time mode the FIRST value of each list is the baseline.",
+  "sweep": {
+    "mpBeetleRunNum": {"range": [1, 101]},
+    "mpVireoTerrSearchDistanceM": [100, 500]
+  },
+
+  "fixed": {
+    "mpBeetleImpact": true,
+    "beetleImpactFilePath": "RESET_LBVI_inputData/inBeetleImpact_Pendleton.csv",
+    "mpBeetleStartYear": 1985,
+    "mpBeetleDamageCounter": 4,
+    "mpInputSimulationDurationYears": 30,
+    "shpFilePath": "RESET_LBVI_inputData/RESET_merge_final.shp",
+    "vegAttributePath": "RESET_LBVI_inputData/inTerritories2020.csv",
+    "groundwaterFilePath": "RESET_LBVI_inputData/inGroundwaterBAU.csv",
+    "trapPlanFilePath": "RESET_LBVI_inputData/inCowbirdTrapsRecent2020.csv",
+    "initVireoPopulationFilePath": "RESET_LBVI_inputData/inVireoPopulation2020.csv"
+  },
+  "_fixed_note": "These RELATIVE input paths resolve against the jar's own folder, so they work as long as RESET_LBVI_inputData sits beside the jar. To run a different beetle scenario, change beetleImpactFilePath to inBeetleImpact_SantaClaraCentral.csv or inBeetleImpact_SantaClaraEast.csv.",
+
+  "heap": "6g",
+  "_heap_comment": "Max JVM heap per run (-Xmx). heap x parallel_jobs must stay under total RAM, leaving a few GB for the OS.",
+
+  "parallel_jobs": 4,
+  "_parallel_comment": "Number of runs to execute in parallel. Set to 1 for sequential."
+}

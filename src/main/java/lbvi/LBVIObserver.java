@@ -44,6 +44,10 @@ public class LBVIObserver implements Steppable {
         //off-by-one, and still guarantees we run after every reset (so nSingles is complete).
         if (eState.schedule.getSteps() % 364 == 363) {
             collectPopData(eState);
+            // ODD 3.22: beetle-damage recovery runs at season end, AFTER logReproductivePerformance.csv has
+            // been written (collectPopData above). Decrements each damaged territory's counter and restores
+            // any that reach 0. No-op when no territory is under beetle damage.
+            lbvi.Beetles.ActBeetleImpact.recoverFromBeetleDamage(eState);
             reset(eState);
         }
         //Stop once the configured number of years has run (1 year = 364 steps). The run covers steps

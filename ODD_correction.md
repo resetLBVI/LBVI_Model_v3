@@ -7,6 +7,22 @@ unless stated otherwise — most entries here bring the ODD text in line with th
 
 ---
 
+## 2026-11-24 — PSHB beetle impacts (ODD 3.1 actBeetleImpact, 3.22 recovery, 6.4 input)
+
+**Status:** code implements the beetle feature; several ODD wording/content points need the team's attention. The *code* resolves each as noted; ODD text should be brought into line (or the team should correct the code if a choice was wrong).
+
+**Sections:** 3.1 (Beetle Impacts on Riparian Vegetation), 3.22 (Vegetation Recovery from Beetle Damage), 6.4 (Annual Beetle Impacts Input), state-variable glossary.
+
+1. **"very stressed" has no matching VegHealth label.** 3.1 sets `territoryVegHealth` to "very stressed", but the code's `VegHealth` enum is 5-valued: Very Healthy(4), Healthy(3), Stressed(2), Severely Stressed(1), Dead(0) — there is no "very stressed". The new ODD's 4-value scale ("very healthy, healthy, stressed, very stressed") also drops "dead". **Code maps "very stressed" → SEVERELYSTRESSED (code 1)** (lowest non-dead tier; recovery later goes to Healthy). ODD and enum vocabularies should be reconciled (rename enum, or fix ODD to "severely stressed", and decide whether "dead" still exists).
+
+2. **3.22 restore-direction looks backwards.** 3.22 says on recovery to "set the value of their (territoryPreBeetleDamageQuality) variable to be the current value of (territoryQuality)" — but the glossary (territoryPreBeetleImpactQuality) says that variable exists to **restore** `territoryQuality` after recovery. Taken literally the 3.22 assignment would copy 0 into the pre-damage field and never restore quality. **Code follows the glossary's stated intent: `terrQuality = terrPreBeetleDamageQuality` on recovery.** ODD 3.22 wording should be flipped to say quality is restored from the pre-damage value.
+
+3. **3.1 cross-reference points to the wrong section.** 3.1 ends "For riparian vegetation regrowth and recovery after PSHB damage, see 3.18." Recovery is actually **3.22**; 3.18 is "End Vireo Breeding Season". Fix the cross-reference to 3.22.
+
+4. **Variable name inconsistency.** The glossary calls it `territoryPreBeetleImpactQuality`; 3.1/3.22 call it `territoryPreBeetleDamageQuality` (which matches the code field `terrPreBeetleDamageQuality`). Pick one name throughout the ODD.
+
+5. **Input filename & that it is a 100-replicate file.** 3.1 names `inBeetleImpact.csv`; 6.4 names `inBeetleImpacts.csv`. The real inputs are per-scenario — `inBeetleImpact_Pendleton.csv`, `inBeetleImpact_SantaClaraCentral.csv`, `inBeetleImpact_SantaClaraEast.csv` — and each holds **100 stochastic PSHB replicates** (`runNum` 1–100) with columns `runNum, hit.year, hit.terr`. 6.4's "a single record each year for each territory" understates this. ODD should: name the scenario files, describe the three columns, state that one `runNum` is applied per LBVI run (model param `mpBeetleRunNum`), and that `hit.year` (the PSHB timeline, 1985-based) is offset-mapped onto the LBVI simulation year via `mpBeetleStartYear` (default 1985 → sim year 1). None of runNum/year-mapping is currently described in the ODD.
+
 ## 2026-11-23 — End of season: max-nesting-attempts trigger now wired (ODD actEndBreedingSeason trigger b)
 
 **Status:** the *code* was brought INTO LINE with the ODD; one naming point to confirm with the team.

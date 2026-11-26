@@ -29,54 +29,27 @@ public class VegInfoIdentifier {
     public final double Quality; //#12
 
     /* Geographic range */
-    public int patchPopUnitID; // I don't know which name to correspond to the input
-    public String patchStreamName; //should be streamName in the input??
-    public int patchReachID; //Not include in the initiation input yet
-    public String patchStreamNetwork; //L1NetworkN in the input file?
-    public String patchStreamLevel; //StreamLeve??
     public final Geometry geometry;
     public final Int2D gridLoc;
 
     //track current ecological conditions
     /* update Patch vegetation health*/
-    public int patchVegCondition; //a continuous numbe from 0-20
     public VegHealth patchVegHealth; //0-4, indicating dead(0), severely stressed(1), stressed(2), healthy(3), very healthy(4)
-    public int patchNyrsSinceDeath; //patch N years since water stress mortality 2.1.3
     public int patchQuality;//a int value from 0-n when n may vary across different habitat quality indices
     /* update territory vegetation information */
-    public String terrVegName;
-    public int terrVegCondition; //0-20 numerical
     public int terrVegHealth; //0-4 categorical; indicating dead(0), severely stressed(1), stressed(2), healthy(3), very healthy(4)
     public int terrQuality;
-    public int terrShWillowM; //territory tree willow mulefat density
-    public int terrTrWillow;
-    public int terrTamarisk;
+
 
     /* territory Vireo information */
     public int terrMaleID;
     public int terrFemaleID;
 
-    /* Daily Vireo and Cowbird updates*/
-    public int patchNVireos; //current number of Vireos in the patch
-    public int patchNTerrWithPairs; //i.e., patchCurrentNests; current number of nests in the patch, which is equal to the number of territories with pairs in the patch
-    public int patchNTerrNoPairs; //the current number of territories with no vireos or only a single vireo in them
-    public int patchNVireoNests; //the current number of vireo nests in the patch
-    public int patchNVireoEggs; //the current number of vireo eggs in the patch
-    public int patchNVireoNestlings; //the current number of vireo nestlings in the patch
-    public int patchNVireoFledglings; //the current number of vireo fledglings in the patch
-    public int patchNCowbirds; //number of Cowbird in the patch
 
-    /* Annual groundwater and flooding level updates (time series input files) from previous version of ODD*/
-    public double patchGroundwaterLevels; //groundwater level (inputs: double- DGW)
-    public WaterStress patchWaterStress; //stress due to groundwater level
-    Integer patchNumGrowing_Flood; //the number of growing seasons since the last flood
-    Integer patchNumGrowing_EffluentRemoval; //the number of growing seasons since stream flow from wastewater treatment
+    /* Annual PSHB impact */
+    public int terrBeetleDamage;
+    public int terrPreBeetleDamageQuality;
 
-    /* Weekly PSHB updates (time series input files) */
-    public int patchNPSHB; //number of PSHB in the patch
-    public boolean patchVegMortalityByPSHB; //default == false, updated TRUE when Tamarisk has been killed
-    public int patchNumGrowing_PSHB; //the number of growing seasons since the last PSHB induced mortality event
-    public int patchShrubWillowKilled; //a value of 1-3. killed by PSHB, old version
 
     /* Weekly TLB updates (time series input files) */
     public int patchNTLB; //number of TLB in the patch

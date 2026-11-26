@@ -1,0 +1,46 @@
+{
+  "_comment": "LBVI run/sweep configuration. run_sweep.py writes one parameter CSV per run and launches lbvi.LBVIEnvironment headless (one JVM per run), with per-run output folders so parallel runs never collide. The default below is the 100-run PSHB beetle batch: mpBeetleRunNum 1..100 against the Pendleton scenario.",
+
+  "jar": "target/RESET_LBVI-1.0-SNAPSHOT.jar",
+  "_jar_note": "Path to the shaded fat jar (relative to where you run the script, or absolute). Build it with:  mvn -q clean package -DskipTests",
+
+  "base_params": "/Users/kaiyinlin/Documents/4_QuickShare/paramListDefault.csv",
+  "_base_params_note": "Baseline for EVERY run (your single source of truth for all parameters). Each run starts from these values, then 'fixed' overrides them, then the swept value overrides that. So list only what the sweep changes in 'fixed'/'sweep'. Set to \"\" to disable and use the model's in-code defaults instead. NOTE: 'fixed' below overrides the input-file paths in this baseline (the baseline's are the colleague's Windows C:/RESET paths), so make sure the input paths in 'fixed' are the ones you want.",
+
+  "_input_note": "The input-file paths in 'fixed' below are ABSOLUTE so runs work no matter where the jar lives. EDIT them for your machine. Alternatively, delete them and place the jar in the same folder as RESET_LBVI_inputData, so the model's built-in relative defaults resolve next to the jar.",
+
+  "seeds": [42],
+  "seed_per_run": true,
+  "_seed_note": "seed_per_run=true gives each run its own reproducible seed = seeds[0] + runIndex (so the 100 beetle runs vary BOTH the PSHB replicate and demographic stochasticity, reproducibly). Set it false to instead run every seed in 'seeds' against every parameter set (cartesian, PSHB-style).",
+
+  "mode": "one_at_a_time",
+  "_mode_options": [
+    "one_at_a_time  : vary one parameter while all others stay at their first (baseline) value",
+    "full_factorial : run every combination of all sweep values (can be large!)"
+  ],
+
+  "_sweep_note": "Each sweep value is a list, OR {\"range\": [start, stop]} (stop exclusive, like Python range) / {\"range\": [start, stop, step]}. In one_at_a_time mode the FIRST value of each list is the baseline.",
+  "sweep": {
+    "mpBeetleRunNum": {"range": [1, 101]},
+    "mpVireoTerrSearchDistanceM": [100, 500]
+  },
+
+  "fixed": {
+    "mpBeetleImpact": true,
+    "beetleImpactFilePath": "/Users/kaiyinlin/Documents/4_QuickShare/RESET_LBVI_inputData/inBeetleImpact_Pendleton.csv",
+    "mpBeetleStartYear": 1985,
+    "mpBeetleDamageCounter": 4,
+    "mpInputSimulationDurationYears": 30,
+    "shpFilePath": "/Users/kaiyinlin/Documents/4_QuickShare/RESET_LBVI_inputData/RESET_merge_final.shp",
+    "vegAttributePath": "/Users/kaiyinlin/Documents/4_QuickShare/RESET_LBVI_inputData/inTerritories2020.csv",
+    "groundwaterFilePath": "/Users/kaiyinlin/Documents/4_QuickShare/RESET_LBVI_inputData/inGroundwaterBAU.csv",
+    "trapPlanFilePath": "/Users/kaiyinlin/Documents/4_QuickShare/RESET_LBVI_inputData/inCowbirdTrapsRecent2020.csv",
+    "initVireoPopulationFilePath": "/Users/kaiyinlin/Documents/4_QuickShare/RESET_LBVI_inputData/inVireoPopulation2020.csv"
+  },
+
+  "heap": "6g",
+  "_heap_comment": "Max JVM heap per run (-Xmx). heap x parallel_jobs must stay under total RAM, leaving a few GB for the OS and JVM overhead.",
+
+  "parallel_jobs": 4,
+  "_parallel_comment": "Number of runs to execute in parallel. Set to 1 for sequential."
+}

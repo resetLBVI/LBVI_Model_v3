@@ -43,6 +43,9 @@ public class LBVIEnvironment extends SimState {
     public String groundwaterFilePath = "RESET_LBVI_inputData/inGroundwaterBAU.csv"; //*
     public String trapPlanFilePath = "RESET_LBVI_inputData/inCowbirdTrapsRecent2020.csv"; //*
     public String initVireoPopulationFilePath = "RESET_LBVI_inputData/inVireoPopulation2020.csv"; //*
+    // Annual PSHB beetle-impact scenario file (ODD 3.1/3.22). Used only when mpBeetleImpact is true. Default is
+    // the Pendleton scenario; switch scenarios by pointing this at _SantaClaraCentral.csv / _SantaClaraEast.csv.
+    public String beetleImpactFilePath = "RESET_LBVI_inputData/inBeetleImpact_Pendleton.csv"; //*
     public String tlbFilePath = "RESET_LBVI_inputData/";
     public String pshbFilePath = "RESET_LBVI_inputData/";
     //setup output files path
@@ -55,6 +58,7 @@ public class LBVIEnvironment extends SimState {
     public String logDispersalDistanceFile = "logDispersalDistance.csv"; //*
     public String logCowbirdArrivalOrDepartureFile = "logCowbirdArrivalOrDeparture.csv"; //*
     public String logDispersalOutcomeFile = "logDispersalOutcome.csv"; // TEMP DIAGNOSTIC (remove after non-breeding investigation; see note temp-dispersal-outcome-logging)
+    public String logBeetleImpactFile = "logBeetleImpact.csv"; // TEMP DIAGNOSTIC (remove after beetle-impact verification; see note temp-beetle-impact-logging)
     public String paramListFilePath = "paramList.csv"; //* run parameter snapshot (reproducibility)
     // OPTIONAL input. Path to a parameter CSV in the SAME "parameter,value" format that paramListFilePath
     // writes out. Blank/null = use the default (or Model-tab) values. When set, it is loaded at the very top
@@ -69,6 +73,7 @@ public class LBVIEnvironment extends SimState {
     public OutputWriter logDispersalDistanceWriter;
     public OutputWriter logCowbirdArrivalOrDepartureWriter;
     public OutputWriter logDispersalOutcomeWriter; // TEMP DIAGNOSTIC (remove after non-breeding investigation; see note temp-dispersal-outcome-logging)
+    public OutputWriter beetleImpactWriter; // TEMP DIAGNOSTIC (remove after beetle-impact verification; see note temp-beetle-impact-logging); null unless mpBeetleImpact && debugLog
     //initialize grids to something sensible. For now, just placeholders; set sizes according to the world
     public final int worldWidth = 200; //* WIDTH and HEIGHT correspond to arbitrary display dimensions
     public final int worldHeight = 200; //* WIDTH and HEIGHT correspond to arbitrary display dimensions
@@ -96,10 +101,18 @@ public class LBVIEnvironment extends SimState {
     public List<TrapInfoIndentifier> trapInfo = new ArrayList<>();
     // terrIDs of territories occupied at simulation start, loaded from initVireoPopulationFilePath
     public List<Integer> initVireoTerrIDs = new ArrayList<>();
+    // Annual PSHB beetle impact (ODD 3.1): simulation year (1-based) -> terrIDs damaged that year. Built by
+    // loadBeetleImpact from the selected runNum and offset-mapped hit.year; consumed by ActBeetleImpact each
+    // year. Empty when beetleImpactFilePath is unset/absent (feature off).
+    public Map<Integer, List<Integer>> beetleImpactByYear = new HashMap<>();
     //agent's state variables
     public int lbviAgentID = 0;
     public Map<Integer, LBVIAgent> lbviAgentMap = new HashMap<>(); // vireoID -> agent, for cross-agent lookups
     public Map<Integer, Nest> nestMap = new HashMap<>();
+    // Globally-unique NestID source: minted when a nest's first egg is laid (LBVIAgent.eggLaying).
+    // Never reset per-year, so every nest across all females AND all years gets a distinct id.
+    private int nestIDCounter = 0;
+    public int nextNestID() { return ++nestIDCounter; }
 
     //LBVI arrival model parameters
     public int lowerArrivalDate = 91; //* ODD: mpVireoFirstDate
@@ -217,6 +230,19 @@ public class LBVIEnvironment extends SimState {
     public int mpOpenDate  = 91;  //* Julian day traps open  (applies to all traps)
     public int mpCloseDate = 169; //* Julian day traps close (applies to all traps)
     public int mpStartCalendarYear = 2025; //* calendar year that simulation year 1 maps to; matches trap-plan Year column
+    //beetle impact (ODD 3.1/3.22)
+    // Master on/off switch for the PSHB beetle-impact simulation. When false (default), no beetle file is
+    // loaded and no damage/recovery is applied, so runs behave exactly as before this feature. When true, the
+    // scenario in beetleImpactFilePath is loaded and applied. mp-prefixed so it round-trips in the param CSV.
+    public boolean mpBeetleImpact = true; //*
+    public int mpBeetleDamageCounter = 4; //* seasons a damaged territory stays at quality 0 before recovering
+    // Which PSHB replicate (runNum column) in the beetle-impact file to apply. The files hold 100 stochastic
+    // replicates; a batch of 100 LBVI runs sets this 1..100 (one replicate per run). Decoupled from the run
+    // seed on purpose, so the beetle scenario and LBVI stochasticity vary independently and reproducibly.
+    public int mpBeetleRunNum = 1; //*
+    // Beetle-file timeline anchor: the hit.year value that maps to LBVI simulation year 1. A row with
+    // hit.year Y applies in simulation year (Y - mpBeetleStartYear + 1). Default 1985 = the PSHB files' first year.
+    public int mpBeetleStartYear = 1985; //*
     //population summary data
     public int populationSize = 0;
     public int nPairs = 0; //|NPairs|- the number of unique female Vireos that created least one Nest.
@@ -248,27 +274,51 @@ public class LBVIEnvironment extends SimState {
      * file. "Headless" = no Model tab, no map, no play button - it runs straight through and writes the output
      * CSVs, so a run can be launched from a terminal or a shell/R/Python script.
      *
-     *   java lbvi.LBVIEnvironment [paramFile.csv] [seed]
+     * Two equivalent argument styles are accepted:
+     *   named (preferred, used by the sweep runner):
+     *     java lbvi.LBVIEnvironment -paramFile run.csv -seed 42 -outputDir runs/run_0001_s42
+     *     (-runId NAME is sugar for -outputDir runs/NAME; -outputDir wins if both are given)
+     *   positional (back-compat):
+     *     java lbvi.LBVIEnvironment [paramFile.csv] [seed]
      *
      *   paramFile.csv  optional - a "parameter,value" CSV (see loadParameterList); omit or "" to use the
      *                  in-code defaults. A file emitted as paramList.csv round-trips directly.
      *   seed           optional long; defaults to System.currentTimeMillis().
+     *   outputDir      optional - a directory that EVERY output file is written into (created if needed), so
+     *                  parallel sweep runs do not collide. Empty = write beside the jar as before. Output
+     *                  paths are not loadable from the param CSV, so this flag is the way to separate runs.
      *
      * Run length comes from mpInputSimulationDurationYears (which the param file may itself override); the
      * LBVIObserver calls kill() at the final year, so the loop below ends on its own. Output CSVs are written
      * just as in a GUI run. (This is the single-config runner; it is NOT a parameter sweep - to sweep, call it
-     * once per configuration from a script, each with its own paramFile and seed.)
+     * once per configuration from a script, each with its own paramFile, seed and outputDir.)
      */
     public static void main(String[] args) {
-        String paramFile = (args.length >= 1) ? args[0] : "";
-        long seed = (args.length >= 2) ? Long.parseLong(args[1]) : System.currentTimeMillis();
+        String paramFile;
+        long   seed;
+        String outputDir;
+        boolean named = args.length > 0 && args[0].startsWith("-");
+        if (named) {
+            paramFile = argValue(args, "-paramFile", "");
+            String seedStr = argValue(args, "-seed", "");
+            seed = seedStr.isEmpty() ? System.currentTimeMillis() : Long.parseLong(seedStr);
+            outputDir = argValue(args, "-outputDir", "");
+            String runId = argValue(args, "-runId", "");
+            if (outputDir.isEmpty() && !runId.isEmpty()) outputDir = "runs/" + runId;
+        } else {
+            paramFile = (args.length >= 1) ? args[0] : "";
+            seed      = (args.length >= 2) ? Long.parseLong(args[1]) : System.currentTimeMillis();
+            outputDir = "";
+        }
 
         LBVIEnvironment state = new LBVIEnvironment(seed);
         state.paramFilePath = paramFile;
+        state.redirectOutputToDir(outputDir); // must run BEFORE start() creates the output writers
         state.start();
 
         System.out.println("Headless run started: seed=" + seed
                 + ", paramFile=" + (paramFile.isEmpty() ? "(none; using defaults)" : paramFile)
+                + ", outputDir=" + (outputDir.isEmpty() ? "(beside jar)" : outputDir)
                 + ", durationYears=" + state.mpInputSimulationDurationYears);
 
         // The Observer's kill() clears the schedule at the final year, so schedule.step() then returns false.
@@ -279,6 +329,34 @@ public class LBVIEnvironment extends SimState {
         }
         state.finish();
         System.out.println("Headless run complete at step " + state.schedule.getSteps() + ".");
+    }
+
+    /** Return the value following {@code key} in args (e.g. "-seed" "42"), or {@code def} if absent. */
+    private static String argValue(String[] args, String key, String def) {
+        for (int i = 0; i < args.length - 1; i++) {
+            if (args[i].equals(key)) return args[i + 1];
+        }
+        return def;
+    }
+
+    /**
+     * Prefix every output-file field with {@code dir} so a whole run's outputs land in one folder (created by
+     * OutputWriter.getFileName when the files are opened). Called from the headless main BEFORE start(); a null
+     * or blank dir leaves the defaults (write beside the jar). Keep this list in sync with the output files
+     * created in start() - it must cover ALL of them so parallel sweep runs never collide.
+     */
+    public void redirectOutputToDir(String dir) {
+        if (dir == null || dir.trim().isEmpty()) return;
+        String d = dir.endsWith("/") ? dir : dir + "/";
+        logDebugFile                     = d + logDebugFile;
+        logMortalityEventsFile           = d + logMortalityEventsFile;
+        logSuccessEventsFile             = d + logSuccessEventsFile;
+        logReproductivePerformanceFile   = d + logReproductivePerformanceFile;
+        logDispersalDistanceFile         = d + logDispersalDistanceFile;
+        logCowbirdArrivalOrDepartureFile = d + logCowbirdArrivalOrDepartureFile;
+        logDispersalOutcomeFile          = d + logDispersalOutcomeFile; // TEMP diagnostic
+        logBeetleImpactFile              = d + logBeetleImpactFile;     // TEMP diagnostic
+        paramListFilePath                = d + paramListFilePath;
     }
 
 
@@ -355,6 +433,19 @@ public class LBVIEnvironment extends SimState {
             this.logDispersalOutcomeWriter.createFile(logDispersalOutcomeHeader);
             // END TEMP DIAGNOSTIC
 
+            // TEMP BEETLE DIAGNOSTIC (remove after beetle-impact verification; see note temp-beetle-impact-logging).
+            // Traces each beetle-damaged territory from the step it is damaged through each season-end until it
+            // recovers. Only created when beetle impacts AND debug logging are both on; otherwise beetleImpactWriter
+            // stays null and logBeetleState(...) is a no-op.
+            if (mpBeetleImpact && debugLog) {
+                String[] logBeetleImpactHeader = {"currentStep", "Year", "Date", "terrID", "terrQuality",
+                        "terrVegHealth", "terrBeetleDamage", "terrPreBeetleDamageQuality"};
+                logBeetleImpactFile = OutputWriter.getFileName(this.logBeetleImpactFile, false);
+                this.beetleImpactWriter = new OutputWriter(logBeetleImpactFile);
+                this.beetleImpactWriter.createFile(logBeetleImpactHeader);
+            }
+            // END TEMP BEETLE DIAGNOSTIC
+
             //(output 7) write parameter snapshot for reproducibility
             paramListFilePath = OutputWriter.getFileName(this.paramListFilePath, false);
             writeParameterList(paramListFilePath);
@@ -401,6 +492,21 @@ public class LBVIEnvironment extends SimState {
         } catch (IOException e) {
             throw new RuntimeException("Fail to load initial Vireo population CSV", e);
         }
+        //(input 6) load annual PSHB beetle-impact scenario (csv) → beetleImpactByYear (ODD 3.1/3.22), only when
+        //the master switch mpBeetleImpact is on. Runs after the param file (loaded at the top of start()) so
+        //mpBeetleImpact / mpBeetleRunNum / mpBeetleStartYear are already set.
+        if (mpBeetleImpact) {
+            try {
+                if (this.beetleImpactFilePath != null && !this.beetleImpactFilePath.trim().isEmpty()) {
+                    beetleImpactFilePath = OutputWriter.getFileName(this.beetleImpactFilePath, true);
+                }
+                loadBeetleImpact(beetleImpactFilePath);
+            } catch (IOException e) {
+                throw new RuntimeException("Fail to load beetle-impact CSV", e);
+            }
+        } else {
+            System.out.println("Beetle impact OFF (mpBeetleImpact=false); no PSHB damage will be applied.");
+        }
         //(10) initiate timer just to update the time
         LBVITimer systemTimer = new LBVITimer();
         // Run the clock EVERY step, at ordering -1 so it fires before the observer (0) and the agents (1)
@@ -421,6 +527,12 @@ public class LBVIEnvironment extends SimState {
         //(12) initiate observer
         LBVIObserver observer = new LBVIObserver();
         schedule.scheduleRepeating(observer);
+        //(13) annual PSHB beetle impact (ODD 3.1), applied on day 0 of each year before breeding, only when
+        //mpBeetleImpact is on. Ordering 0 (after the clock at -1 so currentYear is fresh; before agents at +1).
+        //Recovery (ODD 3.22) runs from LBVIObserver at season end and is a no-op while beetleImpactByYear is empty.
+        if (mpBeetleImpact) {
+            schedule.scheduleRepeating(Schedule.EPOCH, 0, new lbvi.Beetles.ActBeetleImpact());
+        }
         System.out.println("------------------END of the Start Step----------------------------");
     }
 
@@ -598,7 +710,8 @@ public class LBVIEnvironment extends SimState {
                 || name.equals("vegAttributePath")
                 || name.equals("groundwaterFilePath")
                 || name.equals("trapPlanFilePath")
-                || name.equals("initVireoPopulationFilePath");
+                || name.equals("initVireoPopulationFilePath")
+                || name.equals("beetleImpactFilePath");
     }
 
     public void writeParameterList(String csvPath) {
@@ -898,6 +1011,82 @@ public class LBVIEnvironment extends SimState {
         }
     }
 
+    /**
+     * Reads the annual PSHB beetle-impact scenario CSV (a yearly time series from the PSHB model; ODD 6.4) and
+     * populates {@link #beetleImpactByYear} (LBVI simulation year -> list of damaged TerrIDs). Consumed by
+     * {@link lbvi.Beetles.ActBeetleImpact} each year (ODD 3.1).
+     *
+     * Expected CSV columns (header row; matched by name, order-independent; surrounding quotes tolerated):
+     *   runNum, hit.year, hit.terr
+     * Only rows whose runNum equals {@link #mpBeetleRunNum} are kept (the files hold 100 stochastic PSHB
+     * replicates). Each kept row's hit.year is offset-mapped to an LBVI simulation year via
+     * simYear = hit.year - mpBeetleStartYear + 1; rows that map before simulation year 1 are skipped. hit.terr
+     * is a TerrID that must exist in the vegetation data (unknown terrIDs are warned and skipped).
+     *
+     * This input is OPTIONAL: an empty/blank path or a missing file leaves beetleImpactByYear empty (no beetle
+     * impacts), so existing runs and input folders without the file are unaffected.
+     *
+     * @param csvPath path to the beetle-impact scenario CSV (beetleImpactFilePath)
+     */
+    public void loadBeetleImpact(String csvPath) throws IOException {
+        if (csvPath == null || csvPath.trim().isEmpty()) {
+            System.out.println("Beetle-impact file not set; no PSHB damage will be applied.");
+            return;
+        }
+        java.io.File f = new java.io.File(csvPath);
+        if (!f.isFile()) {
+            System.out.println("Beetle-impact file not found (" + csvPath + "); no PSHB damage will be applied.");
+            return;
+        }
+        try (BufferedReader br = new BufferedReader(new FileReader(csvPath))) {
+            String headerLine = stripBom(br.readLine());
+            if (headerLine == null) throw new IOException("Beetle-impact CSV is empty: " + csvPath);
+            String[] headers = headerLine.split(",", -1);
+            Map<String, Integer> col = new HashMap<>();
+            for (int i = 0; i < headers.length; i++) col.put(headers[i].trim().replace("\"", ""), i);
+            requireColumns(col, "Beetle-impact CSV", csvPath, "runNum", "hit.year", "hit.terr");
+            int kept = 0, skippedBeforeStart = 0, skippedUnknownTerr = 0;
+            String line;
+            while ((line = br.readLine()) != null) {
+                if (line.trim().isEmpty()) continue;
+                String[] v = line.split(",", -1);
+                for (int i = 0; i < v.length; i++) v[i] = v[i].trim().replace("\"", "");
+                int runNum = Integer.parseInt(v[col.get("runNum")]);
+                if (runNum != mpBeetleRunNum) continue; // keep only the selected PSHB replicate
+                int hitYear = Integer.parseInt(v[col.get("hit.year")]);
+                int terrID  = Integer.parseInt(v[col.get("hit.terr")]);
+                int simYear = hitYear - mpBeetleStartYear + 1; // offset map onto the LBVI timeline (ODD: see 3.1)
+                if (simYear < 1) { skippedBeforeStart++; continue; } // damage dated before the run starts
+                if (!vegTerrInfo.containsKey(terrID)) {
+                    System.err.println("loadBeetleImpact: terrID " + terrID + " (hit.year " + hitYear
+                            + ") not in vegetation data (inTerritories CSV), skipping");
+                    skippedUnknownTerr++;
+                    continue;
+                }
+                beetleImpactByYear.computeIfAbsent(simYear, k -> new ArrayList<>()).add(terrID);
+                kept++;
+            }
+            System.out.println("Loaded beetle-impact records: runNum=" + mpBeetleRunNum + ", " + kept
+                    + " damage event(s) across " + beetleImpactByYear.size() + " simulation year(s)"
+                    + " (skipped " + skippedBeforeStart + " before year 1, " + skippedUnknownTerr
+                    + " unknown terrID).");
+        }
+    }
+
+    /**
+     * TEMP DIAGNOSTIC (remove after beetle-impact verification; see note temp-beetle-impact-logging).
+     * Append one row to logBeetleImpact.csv capturing a territory's current beetle state. A no-op unless the
+     * diagnostic writer was created (mpBeetleImpact && debugLog). Called from ActBeetleImpact when a territory
+     * is damaged and at each season-end while it is still in its recovery countdown, so each damaged territory
+     * is traced from damage through recovery.
+     */
+    public void logBeetleState(VegInfoIdentifier terr) {
+        if (beetleImpactWriter == null) return; // diagnostic off
+        beetleImpactWriter.addToFile(String.format("%d,%d,%d,%d,%d,%d,%d,%d",
+                schedule.getSteps(), currentYear, currentJulianDay, terr.terrID,
+                terr.terrQuality, terr.terrVegHealth, terr.terrBeetleDamage, terr.terrPreBeetleDamageQuality));
+    }
+
     private void buildBackgroundImageFromShapefile(SimpleFeatureSource featureSource) {
         try {
             // 1. Create a MapContent and add your shapefile as a layer
@@ -1101,6 +1290,9 @@ public class LBVIEnvironment extends SimState {
 
     public String getInitVireoPopulationFilePath() { return initVireoPopulationFilePath; }
     public void setInitVireoPopulationFilePath(String val) { this.initVireoPopulationFilePath = val; }
+
+    public String getBeetleImpactFilePath() { return beetleImpactFilePath; }
+    public void setBeetleImpactFilePath(String val) { this.beetleImpactFilePath = val; }
 
     public String getLogDebugFile() { return logDebugFile; }
     public void setLogDebugFile(String val) { this.logDebugFile = val; }
@@ -1407,5 +1599,17 @@ public class LBVIEnvironment extends SimState {
 
     public int getMpStartCalendarYear() { return mpStartCalendarYear; }
     public void setMpStartCalendarYear(int val) { this.mpStartCalendarYear = val; }
+
+    public boolean isMpBeetleImpact() { return mpBeetleImpact; }
+    public void setMpBeetleImpact(boolean val) { this.mpBeetleImpact = val; }
+
+    public int getMpBeetleDamageCounter() { return mpBeetleDamageCounter; }
+    public void setMpBeetleDamageCounter(int val) { this.mpBeetleDamageCounter = val; }
+
+    public int getMpBeetleRunNum() { return mpBeetleRunNum; }
+    public void setMpBeetleRunNum(int val) { this.mpBeetleRunNum = val; }
+
+    public int getMpBeetleStartYear() { return mpBeetleStartYear; }
+    public void setMpBeetleStartYear(int val) { this.mpBeetleStartYear = val; }
 
 }

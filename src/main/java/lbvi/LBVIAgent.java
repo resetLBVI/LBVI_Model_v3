@@ -47,7 +47,6 @@ public class LBVIAgent implements Steppable {
     ArrayList<Integer> potentialTerritoryList; //determine a potential patch list for dispersal
     int potentialMateID; //record the potential mate
     //Nest state variables
-    int nestID; //a unique ID for each nest
     int nestMaxNVireoEggs; //the maximum number of vireo eggs that can be laid in the nest
     int vireoNestTerrID; // = female vrieoCurrentLocation
     int nestCountdownToHatch; //
@@ -317,7 +316,7 @@ public class LBVIAgent implements Steppable {
                         eState.nNestlings += vireoNumVireoNestlings;
                         //log to the "successEvents.csv" output file
                         String incubationEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), eState.currentYear, eState.currentJulianDay, "hatch", this.vireoNestTerrID,
-                                this.vireoID, this.nestID, this.vireoNumVireoNestlings, "nest", currentNest.getYoungSpecies(eState));
+                                this.vireoID, this.vireoNestID, this.vireoNumVireoNestlings, "nest", currentNest.getYoungSpecies(eState));
                         eState.logSuccessWriter.addToFile(incubationEvent);
                     }
                 }
@@ -337,7 +336,7 @@ public class LBVIAgent implements Steppable {
                         double wholeNestRate = wholeNestMortalityDuringNestling(eState);
                         double perNestlingRate = nestlingMortalityDuringNestling(eState);
                         if (state.random.nextBoolean(wholeNestRate)) {
-                            logDailyMortalityForNest(eState, "daily nest mortality", this.vireoNumVireoNestlings, NESTStatus.NESTLING);
+                            logDailyMortalityForNest(eState, "predator-wholeNest", this.vireoNumVireoNestlings, NESTStatus.NESTLING);
                             killCurrentNest(eState);
                             this.vireoReproStage = Stage.RENEST;
                             this.nestCountdownToRenesting = eState.mpRenestingIntervalDuration;
@@ -376,7 +375,7 @@ public class LBVIAgent implements Steppable {
                         eState.nFledglings += vireoNumVireoFledglings;
                         //log to the "successEvents.csv" output file
                         String nestlingEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), eState.currentYear, eState.currentJulianDay, "fledge", this.vireoNestTerrID,
-                                this.vireoID, this.nestID, this.vireoNumVireoFledglings, "nest", currentNest.getYoungSpecies(eState));
+                                this.vireoID, this.vireoNestID, this.vireoNumVireoFledglings, "nest", currentNest.getYoungSpecies(eState));
                         eState.logSuccessWriter.addToFile(nestlingEvent);
 
                     }
@@ -426,7 +425,7 @@ public class LBVIAgent implements Steppable {
                         }
                         //record the data to logSuccessEvent.csv (before zeroing vireoNumFledglings)
                         String fledgingEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), eState.currentYear, eState.currentJulianDay,
-                                "fledgling independence", this.vireoNestTerrID, this.vireoID, this.nestID,
+                                "fledgling independence", this.vireoNestTerrID, this.vireoID, this.vireoNestID,
                                 this.vireoNumVireoFledglings, "nest", currentNest.getYoungSpecies(eState));
                         eState.logSuccessWriter.addToFile(fledgingEvent);
                         killCurrentNest(eState); // nest lifecycle complete
@@ -915,8 +914,11 @@ for breeding.
         if (this.currentNest == null) {
             this.vireoNestTerrID = this.vireoCurrentLocation;
             int nestPatchID = state.vegTerrInfo.get(this.vireoCurrentLocation).patchID;
-            this.nestID++;
-            Nest newNest = new Nest(state, this.nestID, nestPatchID, this.vireoNestTerrID, this.vireoID);
+            // Not a "nest" until its first egg: create with id 0 and do NOT mint/register yet. The real
+            // globally-unique id is minted at first egg (eggLaying). Clear vireoNestID so building-stage logs
+            // (false start / nest completion) show 0, not a previous nest's id.
+            this.vireoNestID = 0;
+            Nest newNest = new Nest(state, 0, nestPatchID, this.vireoNestTerrID, this.vireoID);
             // Ordering 1 (not the bare form's default 0) for consistency with all vireo agents, so the observer
             // at ordering 0 runs before the nest's daily cowbird-arrival trigger (which writes nCowbirdArrival /
             // nParasitism) on the year-boundary step. Start time kept at getTime()+1.0 (next step): a nest is
@@ -924,9 +926,8 @@ for breeding.
             newNest.event = state.schedule.scheduleRepeating(state.schedule.getTime() + 1.0, 1, newNest);
             this.currentNest = newNest;
             state.activeNests.add(newNest);
-            state.nestMap.put(this.nestID, newNest);
-            // NNests / NPairs are counted at nest COMPLETION (below), not at creation, so that false-start
-            // rebuilds (abandoned before completion) are excluded while every completed attempt is counted.
+            // NPairs is counted at nest COMPLETION (below) and NNests at FIRST EGG (eggLaying), not at
+            // creation, so that false-start rebuilds (abandoned before completion) are excluded.
         }
         // Daily false-start check (ODD actEvaluateRenesting trigger #3): abandon the half-built nest, then send
         // the female through renest evaluation like any other nest loss - she re-checks the date against
@@ -944,9 +945,8 @@ for breeding.
         this.currentNest.nestDaysToCompletion--;
         if (this.currentNest.nestDaysToCompletion <= 0) {
             logBuildingEvent(state, "nest completion", 1);
-            // NNests = total completed nests this year: includes every renesting attempt that completes building,
-            // excludes false-start rebuilds (abandoned above before reaching completion).
-            state.nNests++;
+            // NNests is now counted at FIRST EGG (eggLaying), not here, so a completed-but-eggless nest is not
+            // counted. False-start rebuilds were already excluded (abandoned above before reaching completion).
             // NPairs = unique females that completed at least one nest this year: count this female once, on her
             // first completed nest (includes the initial pairs; no double-count from renests or re-pairing).
             if (!this.hasNestedThisYear) {
@@ -973,11 +973,11 @@ for breeding.
         String youngSp = this.currentNest.getYoungSpecies(state);
         if (eventType.equals("false start")) {
             String row = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), state.currentYear, state.currentJulianDay,
-                    eventType, this.vireoNestTerrID, this.vireoID, this.nestID, "NA", numIndividual, "nest", youngSp);
+                    eventType, this.vireoNestTerrID, this.vireoID, this.vireoNestID, "NA", numIndividual, "nest", youngSp);
             state.logMortalityWriter.addToFile(row);
         } else {
             String row = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), state.currentYear, state.currentJulianDay,
-                    eventType, this.vireoNestTerrID, this.vireoID, this.nestID, numIndividual, "nest", youngSp);
+                    eventType, this.vireoNestTerrID, this.vireoID, this.vireoNestID, numIndividual, "nest", youngSp);
             state.logSuccessWriter.addToFile(row);
         }
     }
@@ -1022,6 +1022,16 @@ for breeding.
         // STEP 2 (ODD 3.10) - lay one new Vireo egg.
         femaleAgent.vireoNumVireoEggs++;
 
+        // A nest "becomes a nest" when its first egg is laid in the completed nest: mint its globally-unique
+        // NestID, register it, and count the nest attempt (NNests). Keyed on nest.nestID == 0 (NOT the egg
+        // count) so re-laying after a same-day egg-predation drop does not mint a second id for the same nest.
+        if (nest.nestID == 0) {
+            nest.nestID = state.nextNestID();
+            femaleAgent.vireoNestID = nest.nestID;
+            state.nestMap.put(nest.nestID, nest);
+            state.nNests++;
+        }
+
         // STEP 3 (ODD 3.10) - one predation draw per egg now in the nest (Vireo and Cowbird alike).
         eggPredationDuringEggLaying(state, femaleAgent, nest);
 
@@ -1033,7 +1043,7 @@ for breeding.
             state.nEggs += femaleAgent.vireoNumVireoEggs;
             //log SuccessEvents.csv, clutch completion
             String eggLayingEvent = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", state.schedule.getSteps(), state.currentYear, state.currentJulianDay, "clutch completion", femaleAgent.vireoNestTerrID,
-                    femaleAgent.vireoID, femaleAgent.nestID, femaleAgent.vireoNumVireoEggs, "nest", femaleAgent.currentNest.getYoungSpecies(state));
+                    femaleAgent.vireoID, femaleAgent.vireoNestID, femaleAgent.vireoNumVireoEggs, "nest", femaleAgent.currentNest.getYoungSpecies(state));
             state.logSuccessWriter.addToFile(eggLayingEvent);
         }
     }
@@ -1271,7 +1281,7 @@ for breeding.
     private void logDailyMortalityForNest(LBVIEnvironment eState, String eventType, int numIndividual, NESTStatus entityType, String cowbirdID) {
         String youngSp = (currentNest != null) ? currentNest.getYoungSpecies(eState) : "none";
         String dailyMortality = String.format("%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s", eState.schedule.getSteps(), eState.currentYear, eState.currentJulianDay,
-                eventType, this.vireoNestTerrID, this.vireoID, this.nestID, cowbirdID, numIndividual, entityType, youngSp);
+                eventType, this.vireoNestTerrID, this.vireoID, this.vireoNestID, cowbirdID, numIndividual, entityType, youngSp);
         eState.logMortalityWriter.addToFile(dailyMortality);
     }
 
@@ -1333,7 +1343,6 @@ for breeding.
             this.vireoNumRecruits = 0;      //reset the per-season recruit count (J1)
             this.vireoRecruitList.clear();  //reset the per-season recruit ID list to stay consistent with the count
             //nest related
-            this.nestID = 0;
             this.nestMaxNVireoEggs = 0;     //cleared; re-drawn at each nest completion (ODD 3.8), not at the annual reset
             this.vireoNestTerrID = 0;
             this.currentNest = null;
